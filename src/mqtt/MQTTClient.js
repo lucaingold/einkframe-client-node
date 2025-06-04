@@ -1,0 +1,126 @@
+/**
+ * MQTTClient - Handles all MQTT connectivity and message processing
+ */
+const mqtt = require('mqtt');
+const config = require('../config/ConfigManager');
+
+class MQTTClient {
+  constructor(messageHandler) {
+    this.messageHandler = messageHandler;
+    this.client = null;
+  }
+
+  /**
+   * Connect to the MQTT broker
+   */
+  connect() {
+    console.log(`Connecting to MQTT broker at ${config.mqtt.broker.url}`);
+
+    this.client = mqtt.connect(
+      `mqtts://${config.mqtt.broker.url}`,
+      { ...config.mqtt.options, port: config.mqtt.broker.port }
+    );
+
+    // Set up event handlers
+    this.client.on('connect', () => this.handleConnect());
+    this.client.on('message', (topic, message) => this.handleMessage(topic, message));
+    this.client.on('error', (err) => this.handleError(err));
+    this.client.on('close', () => this.handleClose());
+    this.client.on('reconnect', () => this.handleReconnect());
+  }
+
+  /**
+   * Handle successful connection to MQTT broker
+   */
+  handleConnect() {
+    console.log('Connected to MQTT broker');
+
+    // Subscribe to image display topic for all devices
+    this.client.subscribe(config.mqtt.topics.imageDisplay, { qos: 1 }, (err) => {
+      if (err) {
+        console.error('Error subscribing to image display topic:', err);
+      } else {
+        console.log(`Subscribed to topic: ${config.mqtt.topics.imageDisplay}`);
+      }
+    });
+  }
+
+  /**
+   * Handle incoming MQTT messages
+   * @param {string} topic - The topic the message was received on
+   * @param {Buffer} message - The message payload
+   */
+  async handleMessage(topic, message) {
+    try {
+      console.log(`Received message on topic: ${topic}`);
+
+      // Parse device ID from topic
+      const deviceId = this.extractDeviceIdFromTopic(topic);
+
+      // Only process messages for the specific device ID
+      if (deviceId !== config.device.id) {
+        console.log(`Ignoring message for device ${deviceId} - not the target device`);
+        return;
+      }
+
+      if (topic.includes('image/display')) {
+        // Pass the message to the handler
+        await this.messageHandler.handleImageMessage(message);
+      }
+    } catch (error) {
+      console.error('Error processing message:', error);
+    }
+  }
+
+  /**
+   * Handle MQTT client errors
+   * @param {Error} err - The error object
+   */
+  handleError(err) {
+    console.error('MQTT client error:', err);
+  }
+
+  /**
+   * Handle MQTT connection close
+   */
+  handleClose() {
+    console.log('Connection to MQTT broker closed');
+  }
+
+  /**
+   * Handle MQTT reconnection attempts
+   */
+  handleReconnect() {
+    console.log('Attempting to reconnect to MQTT broker');
+  }
+
+  /**
+   * Extract device ID from MQTT topic
+   * @param {string} topic - The MQTT topic
+   * @returns {string} The device ID
+   */
+  extractDeviceIdFromTopic(topic) {
+    // Expected format: device/<deviceId>/image/display or device/<deviceId>/status/online
+    const parts = topic.split('/');
+    return parts.length >= 3 ? parts[1] : 'unknown';
+  }
+
+  /**
+   * Close the MQTT client connection
+   * @returns {Promise} Promise that resolves when the client is closed
+   */
+  disconnect() {
+    return new Promise((resolve) => {
+      if (this.client) {
+        this.client.end(true, () => {
+          console.log('MQTT client disconnected');
+          resolve();
+        });
+      } else {
+        resolve();
+      }
+    });
+  }
+}
+
+module.exports = MQTTClient;
