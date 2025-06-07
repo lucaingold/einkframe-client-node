@@ -5,6 +5,11 @@ require('dotenv').config();
 
 class ConfigManager {
   constructor() {
+    // Device Configuration - define this first so we can use it in MQTT options
+    this.device = {
+      id: process.env.SPECIFIC_DEVICE_ID
+    };
+
     // MQTT Configuration
     this.mqtt = {
       broker: {
@@ -12,7 +17,7 @@ class ConfigManager {
         port: parseInt(process.env.MQTT_BROKER_PORT) || 8883
       },
       options: {
-        clientId: process.env.MQTT_CLIENT_ID + '-' + Math.random().toString(16).substring(2, 8),
+        clientId: process.env.MQTT_CLIENT_ID + this.device.id,
         username: process.env.MQTT_USERNAME,
         password: process.env.MQTT_PASSWORD,
         clean: true,
@@ -31,11 +36,6 @@ class ConfigManager {
       align4Bytes: true,
       vcom: 2270,
       bpp: 4 // 4 bits per pixel, 16 grayscale levels
-    };
-
-    // Device Configuration
-    this.device = {
-      id: process.env.SPECIFIC_DEVICE_ID
     };
   }
 }
