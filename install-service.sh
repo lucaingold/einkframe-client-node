@@ -1,10 +1,10 @@
 #!/bin/bash
 
-# Script to install einkframe-client-node as a systemd service
-# This will enable the application to run on startup with sudo privileges
+# Debug mode - print all commands as they are executed
+set -x
 
-# Exit on any error
-set -e
+echo "Starting einkframe installation script..."
+echo "This script will install the einkframe service on your Raspberry Pi."
 
 # Ensure script is run with sudo
 if [ "$(id -u)" -ne 0 ]; then
@@ -14,7 +14,11 @@ fi
 
 # Get the absolute path of the application directory
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+echo "Application directory: $APP_DIR"
+
 NODE_PATH="$(which node)"
+echo "Node.js path: $NODE_PATH"
+
 SERVICE_NAME="einkframe"
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
 ENV_FILE="$APP_DIR/.env"
@@ -27,66 +31,50 @@ if [ -f "$ENV_FILE" ]; then
     echo "Created backup of existing .env file at $ENV_FILE.backup"
 fi
 
-# Get current values from .env (if it exists)
-if [ -f "$ENV_FILE" ]; then
-    # Try to extract current values as defaults
-    CURRENT_MQTT_BROKER_URL=$(grep MQTT_BROKER_URL "$ENV_FILE" | cut -d= -f2 2>/dev/null || echo "")
-    CURRENT_MQTT_USERNAME=$(grep MQTT_USERNAME "$ENV_FILE" | cut -d= -f2 2>/dev/null || echo "")
-    CURRENT_MQTT_PASSWORD=$(grep MQTT_PASSWORD "$ENV_FILE" | cut -d= -f2 2>/dev/null || echo "")
-fi
+# Try to detect the primary network interface and MAC address
+echo "Detecting network interfaces..."
+ip addr show
 
-# Ask for MQTT configuration
-echo ""
-echo "===== MQTT Configuration ====="
-echo "Please provide MQTT configuration details (press Enter to use existing values):"
-echo ""
+echo "Detecting MAC address..."
+PRIMARY_INTERFACE=$(ip route | grep default | awk '{print $5}' | head -n 1)
+echo "Primary interface: $PRIMARY_INTERFACE"
 
-# MQTT_BROKER_URL - Force interactive input with </dev/tty
-echo -n "MQTT Broker URL [$CURRENT_MQTT_BROKER_URL]: "
-read MQTT_BROKER_URL </dev/tty
-MQTT_BROKER_URL=${MQTT_BROKER_URL:-$CURRENT_MQTT_BROKER_URL}
-
-# MQTT_USERNAME - Force interactive input with </dev/tty
-echo -n "MQTT Username [$CURRENT_MQTT_USERNAME]: "
-read MQTT_USERNAME </dev/tty
-MQTT_USERNAME=${MQTT_USERNAME:-$CURRENT_MQTT_USERNAME}
-
-# MQTT_PASSWORD - Force interactive input with </dev/tty
-echo -n "MQTT Password [$CURRENT_MQTT_PASSWORD]: "
-read -s MQTT_PASSWORD </dev/tty
-echo
-MQTT_PASSWORD=${MQTT_PASSWORD:-$CURRENT_MQTT_PASSWORD}
-
-echo ""
-echo "===== Device Configuration ====="
-
-# Get the Raspberry Pi's MAC address (using the primary ethernet/wifi interface)
-MAC_ADDRESS=$(cat /sys/class/net/$(ip route show default | awk '/default/ {print $5}')/address 2>/dev/null || echo "")
-if [ -z "$MAC_ADDRESS" ]; then
-    # Fallback method if the first method fails
-    MAC_ADDRESS=$(ip link | grep -E 'eth|wlan' | head -n 1 | awk '{print $2}')
-
-    # If still empty, provide a manual option
-    if [ -z "$MAC_ADDRESS" ]; then
-        echo "Could not automatically detect MAC address."
-        echo -n "Please enter device ID manually: "
-        read MAC_ADDRESS </dev/tty
-    fi
-fi
-
-echo "Using device MAC address: $MAC_ADDRESS"
-echo ""
-
-# Update .env file with new values but preserve other settings
-if [ -f "$ENV_FILE" ]; then
-    # Update specific values in the existing .env file
-    sed -i "s|^MQTT_BROKER_URL=.*|MQTT_BROKER_URL=$MQTT_BROKER_URL|" "$ENV_FILE"
-    sed -i "s|^MQTT_USERNAME=.*|MQTT_USERNAME=$MQTT_USERNAME|" "$ENV_FILE"
-    sed -i "s|^MQTT_PASSWORD=.*|MQTT_PASSWORD=$MQTT_PASSWORD|" "$ENV_FILE"
-    sed -i "s|^SPECIFIC_DEVICE_ID=.*|SPECIFIC_DEVICE_ID=$MAC_ADDRESS|" "$ENV_FILE"
+if [ -n "$PRIMARY_INTERFACE" ]; then
+    MAC_ADDRESS=$(cat /sys/class/net/$PRIMARY_INTERFACE/address 2>/dev/null || echo "")
+    echo "MAC address from primary interface: $MAC_ADDRESS"
 else
-    # Create a new .env file
-    cat > "$ENV_FILE" << EOF
+    echo "Could not detect primary interface"
+    MAC_ADDRESS=""
+fi
+
+# If we couldn't get the MAC address, try other methods
+if [ -z "$MAC_ADDRESS" ]; then
+    echo "Trying alternate methods to get MAC address..."
+    # Try to find any ethernet or wireless interface
+    MAC_ADDRESS=$(cat /sys/class/net/$(ls /sys/class/net | grep -E 'eth|wlan' | head -n 1)/address 2>/dev/null || echo "")
+    echo "MAC address from alternate method: $MAC_ADDRESS"
+fi
+
+# If still empty, use a placeholder
+if [ -z "$MAC_ADDRESS" ]; then
+    MAC_ADDRESS="unknown-device"
+    echo "Could not detect MAC address, using placeholder: $MAC_ADDRESS"
+fi
+
+echo "Using device ID: $MAC_ADDRESS"
+
+echo "===== MQTT Configuration ====="
+
+# Interactive prompting for MQTT configuration
+read -p "Enter MQTT Broker URL: " MQTT_BROKER_URL
+read -p "Enter MQTT Username: " MQTT_USERNAME
+read -s -p "Enter MQTT Password: " MQTT_PASSWORD
+echo ""
+
+echo "Creating or updating .env file..."
+
+# Create new env file content
+cat > "$ENV_FILE" << EOF
 MQTT_BROKER_URL=$MQTT_BROKER_URL
 MQTT_BROKER_PORT=8883
 MQTT_CLIENT_ID=einkframe-client-
@@ -97,12 +85,10 @@ MQTT_TOPIC_DEVICE_STATUS=device/+/status/online
 IMAGE_SAVE_PATH=./images
 SPECIFIC_DEVICE_ID=$MAC_ADDRESS
 EOF
-fi
 
 echo "Environment configuration updated."
-echo ""
-echo "===== Service Installation ====="
-echo "Installing einkframe-client-node as a systemd service..."
+
+echo "Creating systemd service file..."
 
 # Create systemd service file
 cat > $SERVICE_FILE << EOF
@@ -125,24 +111,24 @@ SyslogIdentifier=einkframe
 WantedBy=multi-user.target
 EOF
 
-# Set permissions for the service file
+echo "Setting permissions for service file..."
 chmod 644 $SERVICE_FILE
 
-# Reload systemd daemon to recognize the new service
+echo "Reloading systemd daemon..."
 systemctl daemon-reload
 
-# Enable the service to start at boot
+echo "Enabling service to start at boot..."
 systemctl enable $SERVICE_NAME
 
-# Start the service
+echo "Starting service..."
 systemctl start $SERVICE_NAME
+
+echo "Checking service status..."
+systemctl status $SERVICE_NAME
 
 echo ""
 echo "===== Installation Complete ====="
 echo "Service installed and started successfully!"
-echo "Service status:"
-systemctl status $SERVICE_NAME
-
 echo ""
 echo "You can manage the service with the following commands:"
 echo "  sudo systemctl start $SERVICE_NAME    # Start the service"
@@ -150,3 +136,7 @@ echo "  sudo systemctl stop $SERVICE_NAME     # Stop the service"
 echo "  sudo systemctl restart $SERVICE_NAME  # Restart the service"
 echo "  sudo systemctl status $SERVICE_NAME   # Check service status"
 echo "  sudo journalctl -u $SERVICE_NAME -f   # View and follow logs"
+
+# Turn off debug mode
+set +x
+
