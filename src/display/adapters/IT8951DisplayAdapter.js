@@ -8,27 +8,96 @@ class IT8951DisplayAdapter extends BaseDisplayAdapter {
   constructor() {
     super();
     this.initialized = false;
+    this.initializationTimeout = null;
+    this.initializationRetries = 0;
+    this.maxRetries = 3;
 
-    // Initialize the display with configuration
-    const IT8951 = require('node-it8951');
-    this.display = new IT8951({
-      MAX_BUFFER_SIZE: config.display.maxBufferSize,
-      ALIGN4BYTES: config.display.align4Bytes,
-      VCOM: config.display.vcom
-    });
+    try {
+      // Initialize the display with configuration
+      const IT8951 = require('node-it8951');
+      this.display = new IT8951({
+        MAX_BUFFER_SIZE: config.display.maxBufferSize,
+        ALIGN4BYTES: config.display.align4Bytes,
+        VCOM: config.display.vcom
+      });
 
-    console.log('IT8951 display adapter created');
+      console.log('IT8951 display adapter created');
+    } catch (error) {
+      console.error('Error creating IT8951 display adapter:', error.message);
+      // Create a dummy display object to prevent null references
+      this.display = {
+        init: () => { throw new Error('Display initialization failed'); },
+        clear: () => {},
+        draw: () => {},
+        close: () => {}
+      };
+    }
   }
 
   /**
-   * Initialize the e-ink display
+   * Initialize the e-ink display with timeout and retry logic
    */
   init() {
-    if (!this.initialized) {
-      console.log('Initializing e-ink display...');
+    if (this.initialized) {
+      return;
+    }
+
+    // Clear any existing timeout
+    if (this.initializationTimeout) {
+      clearTimeout(this.initializationTimeout);
+    }
+
+    console.log(`Initializing e-ink display (attempt ${this.initializationRetries + 1} of ${this.maxRetries})...`);
+
+    try {
+      // Set a timeout to detect hanging initialization
+      this.initializationTimeout = setTimeout(() => {
+        if (!this.initialized) {
+          console.error('Display initialization timed out after 10 seconds');
+
+          // Try to retry initialization if under max attempts
+          if (this.initializationRetries < this.maxRetries) {
+            this.initializationRetries++;
+            console.log('Retrying display initialization...');
+            this.init();
+          } else {
+            console.error(`Failed to initialize display after ${this.maxRetries} attempts`);
+          }
+        }
+      }, 10000); // 10 second timeout
+
+      // Initialize the display
       this.display.init();
-      console.log('Display initialized.');
+
+      // If we get here without error, clear timeout and mark as initialized
+      clearTimeout(this.initializationTimeout);
+      this.initializationTimeout = null;
       this.initialized = true;
+      console.log('Display initialized successfully.');
+
+      // Reset retry counter
+      this.initializationRetries = 0;
+    } catch (error) {
+      // Clear the timeout if there's an error
+      if (this.initializationTimeout) {
+        clearTimeout(this.initializationTimeout);
+        this.initializationTimeout = null;
+      }
+
+      console.error(`Error initializing e-ink display: ${error.message}`);
+
+      // Try to retry initialization if under max attempts
+      if (this.initializationRetries < this.maxRetries) {
+        this.initializationRetries++;
+
+        // Wait a bit before retrying
+        setTimeout(() => {
+          console.log('Retrying display initialization after error...');
+          this.init();
+        }, 2000);
+      } else {
+        console.error(`Failed to initialize display after ${this.maxRetries} attempts`);
+      }
     }
   }
 
@@ -105,8 +174,18 @@ class IT8951DisplayAdapter extends BaseDisplayAdapter {
    * Close the display connection
    */
   close() {
+    // Clear any pending initialization timeout
+    if (this.initializationTimeout) {
+      clearTimeout(this.initializationTimeout);
+      this.initializationTimeout = null;
+    }
+
     if (this.initialized) {
-      this.display.close();
+      try {
+        this.display.close();
+      } catch (error) {
+        console.error('Error closing display:', error.message);
+      }
       this.initialized = false;
       console.log('E-ink display closed');
     }
