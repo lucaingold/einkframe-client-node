@@ -3,6 +3,12 @@
 # Script to install einkframe-client-node as a systemd service
 # This will enable the application to run on startup with sudo privileges
 
+# Exit immediately if a command fails
+set -e
+
+# Enable debugging for file operations
+DEBUG_ENV_FILE=true
+
 # Ensure script is run with sudo
 if [ "$(id -u)" -ne 0 ]; then
     echo "Please run this script with sudo: sudo ./install-service.sh"
@@ -18,7 +24,7 @@ ENV_FILE="$APP_DIR/.env"
 clear
 echo "╔════════════════════════════════════════╗"
 echo "║     einkframe Service Installation     ║"
-echo "╚════════════════════════════════════════╝"
+echo "╚════════════════════════��═══════════════╝"
 echo
 
 # Find the Node.js executable - handle NVM and other installations
@@ -72,17 +78,49 @@ echo "Using Node.js: $NODE_PATH"
 echo "Version: $($NODE_PATH --version)"
 echo
 
-# Check if .env file exists and create a backup
+# Check existing .env file permissions and back it up
 if [ -f "$ENV_FILE" ]; then
+    # Check if we can read the file
+    if [ ! -r "$ENV_FILE" ]; then
+        echo "Warning: Cannot read existing .env file. Fixing permissions..."
+        chmod +r "$ENV_FILE"
+    fi
+
+    # Create backup
     cp "$ENV_FILE" "$ENV_FILE.backup" > /dev/null 2>&1
     echo "✓ Created backup of existing .env file"
+
+    # Check write permissions on directory
+    if [ ! -w "$(dirname "$ENV_FILE")" ]; then
+        echo "Warning: Cannot write to the directory. Fixing permissions..."
+        chmod +w "$(dirname "$ENV_FILE")"
+    fi
+else
+    echo "No existing .env file found. Will create a new one."
+    # Check write permissions on directory
+    if [ ! -w "$(dirname "$ENV_FILE")" ]; then
+        echo "Warning: Cannot write to the directory. Fixing permissions..."
+        chmod +w "$(dirname "$ENV_FILE")"
+    fi
 fi
 
 # Get existing values from .env if it exists
+CURRENT_MQTT_BROKER_URL=""
+CURRENT_MQTT_USERNAME=""
+CURRENT_MQTT_PASSWORD=""
+
 if [ -f "$ENV_FILE" ]; then
+    # Try to extract current values as defaults
     CURRENT_MQTT_BROKER_URL=$(grep MQTT_BROKER_URL "$ENV_FILE" | cut -d= -f2 2>/dev/null || echo "")
     CURRENT_MQTT_USERNAME=$(grep MQTT_USERNAME "$ENV_FILE" | cut -d= -f2 2>/dev/null || echo "")
     CURRENT_MQTT_PASSWORD=$(grep MQTT_PASSWORD "$ENV_FILE" | cut -d= -f2 2>/dev/null || echo "")
+
+    if $DEBUG_ENV_FILE; then
+        echo "DEBUG: Current values from .env:"
+        echo "  Broker URL: '$CURRENT_MQTT_BROKER_URL'"
+        echo "  Username: '$CURRENT_MQTT_USERNAME'"
+        echo "  Password: [${#CURRENT_MQTT_PASSWORD} characters]"
+    fi
 fi
 
 # Detect MAC address quietly
@@ -137,18 +175,17 @@ if [ -z "$MQTT_PASSWORD" ]; then
     MQTT_PASSWORD=$CURRENT_MQTT_PASSWORD
 fi
 
-# Update or create .env file
-if [ -f "$ENV_FILE" ]; then
-    # Update existing file
-    sed -i "s|^MQTT_BROKER_URL=.*|MQTT_BROKER_URL=$MQTT_BROKER_URL|" "$ENV_FILE"
-    sed -i "s|^MQTT_USERNAME=.*|MQTT_USERNAME=$MQTT_USERNAME|" "$ENV_FILE"
-    if [ -n "$MQTT_PASSWORD" ]; then
-        sed -i "s|^MQTT_PASSWORD=.*|MQTT_PASSWORD=$MQTT_PASSWORD|" "$ENV_FILE"
-    fi
-    sed -i "s|^SPECIFIC_DEVICE_ID=.*|SPECIFIC_DEVICE_ID=$MAC_ADDRESS|" "$ENV_FILE"
-else
-    # Create new file
-    cat > "$ENV_FILE" << EOF
+# Debug output to verify input was captured
+if $DEBUG_ENV_FILE; then
+    echo "DEBUG: Values to be written to .env:"
+    echo "  Broker URL: '$MQTT_BROKER_URL'"
+    echo "  Username: '$MQTT_USERNAME'"
+    echo "  Password: [${#MQTT_PASSWORD} characters]"
+    echo "  MAC Address: '$MAC_ADDRESS'"
+fi
+
+# Create new .env file directly instead of modifying the existing one
+cat > "$ENV_FILE.new" << EOF
 MQTT_BROKER_URL=$MQTT_BROKER_URL
 MQTT_BROKER_PORT=8883
 MQTT_CLIENT_ID=einkframe-client-
@@ -159,9 +196,23 @@ MQTT_TOPIC_DEVICE_STATUS=device/+/status/online
 IMAGE_SAVE_PATH=./images
 SPECIFIC_DEVICE_ID=$MAC_ADDRESS
 EOF
+
+# Check if the new file was created successfully
+if [ -f "$ENV_FILE.new" ]; then
+    # Move the new file to replace the old one
+    mv "$ENV_FILE.new" "$ENV_FILE"
+
+    if $DEBUG_ENV_FILE; then
+        echo "DEBUG: New .env file content:"
+        cat "$ENV_FILE"
+    fi
+
+    echo "✓ Environment configuration updated"
+else
+    echo "ERROR: Failed to create new .env file. Check permissions."
+    exit 1
 fi
 
-echo "✓ Environment configuration updated"
 echo
 
 echo "Installing systemd service..."
