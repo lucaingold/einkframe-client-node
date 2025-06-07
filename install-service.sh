@@ -27,19 +27,32 @@ echo "║     einkframe Service Installation     ║"
 echo "╚════════════════════════════════════════╝"
 echo
 
-# Check if running on a Raspberry Pi
+# Check if running on a Raspberry Pi or compatible system (including DietPi)
 IS_RASPBERRY_PI=false
-if [ -f /proc/cpuinfo ] && grep -q "Raspberry Pi" /proc/cpuinfo; then
+
+# Check for Raspberry Pi in cpuinfo
+if [ -f /proc/cpuinfo ] && grep -q -E "Raspberry Pi|BCM2708|BCM2709|BCM2711|BCM2835|BCM2836|BCM2837|BCM2838" /proc/cpuinfo; then
     IS_RASPBERRY_PI=true
 fi
 
-if [ -f /etc/os-release ] && grep -q "raspbian" /etc/os-release; then
-    IS_RASPBERRY_PI=true
+# Check for known OS distributions
+if [ -f /etc/os-release ]; then
+    if grep -q -E "raspbian|dietpi|raspberry|debian" /etc/os-release; then
+        IS_RASPBERRY_PI=true
+    fi
 fi
 
-# If we detect Raspberry Pi, check and enable SPI if needed
+# Check for Pi-specific hardware directories
+if [ -d "/sys/firmware/devicetree/base/model" ] && [ -f "/sys/firmware/devicetree/base/model" ]; then
+    if grep -q "Raspberry Pi" /sys/firmware/devicetree/base/model; then
+        IS_RASPBERRY_PI=true
+    fi
+fi
+
+# If we detect a Pi-compatible system, check and enable SPI if needed
 if $IS_RASPBERRY_PI; then
-    echo "Raspberry Pi detected. Checking SPI configuration..."
+    echo "Raspberry Pi or compatible system detected (DietPi/Raspbian)"
+    echo "Checking SPI configuration..."
 
     # Check if SPI is already enabled
     if grep -q "^dtparam=spi=on" /boot/config.txt; then
@@ -47,13 +60,20 @@ if $IS_RASPBERRY_PI; then
     else
         echo "Enabling SPI interface..."
 
-        # Try raspi-config if available
+        # Try raspi-config if available (standard Raspbian)
         if command -v raspi-config >/dev/null 2>&1; then
             # Enable SPI using raspi-config non-interactive mode
             raspi-config nonint do_spi 0
             echo "✓ SPI enabled via raspi-config"
+        # Try dietpi-config if available (DietPi specific)
+        elif command -v dietpi-config >/dev/null 2>&1; then
+            # Enable SPI through dietpi-config if possible
+            # Note: dietpi-config might not have a direct non-interactive SPI command
+            # Manual modification is the safer option for DietPi
+            echo "dtparam=spi=on" >> /boot/config.txt
+            echo "✓ SPI enabled by modifying /boot/config.txt (DietPi method)"
         else
-            # Manual method if raspi-config is not available
+            # Manual method as fallback
             echo "dtparam=spi=on" >> /boot/config.txt
             echo "✓ SPI enabled by modifying /boot/config.txt"
         fi
@@ -62,6 +82,8 @@ if $IS_RASPBERRY_PI; then
         echo "The installation will continue, but you should reboot your system afterwards."
         echo
     fi
+else
+    echo "Non-Raspberry Pi system detected. Skipping SPI configuration."
 fi
 
 # Find the Node.js executable - handle NVM and other installations
