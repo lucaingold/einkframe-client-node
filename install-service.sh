@@ -30,52 +30,66 @@ fi
 # Get current values from .env (if it exists)
 if [ -f "$ENV_FILE" ]; then
     # Try to extract current values as defaults
-    CURRENT_MQTT_BROKER_URL=$(grep MQTT_BROKER_URL "$ENV_FILE" | cut -d= -f2)
-    CURRENT_MQTT_USERNAME=$(grep MQTT_USERNAME "$ENV_FILE" | cut -d= -f2)
-    CURRENT_MQTT_PASSWORD=$(grep MQTT_PASSWORD "$ENV_FILE" | cut -d= -f2)
+    CURRENT_MQTT_BROKER_URL=$(grep MQTT_BROKER_URL "$ENV_FILE" | cut -d= -f2 2>/dev/null || echo "")
+    CURRENT_MQTT_USERNAME=$(grep MQTT_USERNAME "$ENV_FILE" | cut -d= -f2 2>/dev/null || echo "")
+    CURRENT_MQTT_PASSWORD=$(grep MQTT_PASSWORD "$ENV_FILE" | cut -d= -f2 2>/dev/null || echo "")
 fi
 
 # Ask for MQTT configuration
+echo ""
+echo "===== MQTT Configuration ====="
 echo "Please provide MQTT configuration details (press Enter to use existing values):"
+echo ""
 
-# MQTT_BROKER_URL
+# MQTT_BROKER_URL - Force interactive input with </dev/tty
 echo -n "MQTT Broker URL [$CURRENT_MQTT_BROKER_URL]: "
-read MQTT_BROKER_URL
+read MQTT_BROKER_URL </dev/tty
 MQTT_BROKER_URL=${MQTT_BROKER_URL:-$CURRENT_MQTT_BROKER_URL}
 
-# MQTT_USERNAME
+# MQTT_USERNAME - Force interactive input with </dev/tty
 echo -n "MQTT Username [$CURRENT_MQTT_USERNAME]: "
-read MQTT_USERNAME
+read MQTT_USERNAME </dev/tty
 MQTT_USERNAME=${MQTT_USERNAME:-$CURRENT_MQTT_USERNAME}
 
-# MQTT_PASSWORD
+# MQTT_PASSWORD - Force interactive input with </dev/tty
 echo -n "MQTT Password [$CURRENT_MQTT_PASSWORD]: "
-read -s MQTT_PASSWORD
+read -s MQTT_PASSWORD </dev/tty
 echo
 MQTT_PASSWORD=${MQTT_PASSWORD:-$CURRENT_MQTT_PASSWORD}
+
+echo ""
+echo "===== Device Configuration ====="
 
 # Get the Raspberry Pi's MAC address (using the primary ethernet/wifi interface)
 MAC_ADDRESS=$(cat /sys/class/net/$(ip route show default | awk '/default/ {print $5}')/address 2>/dev/null || echo "")
 if [ -z "$MAC_ADDRESS" ]; then
     # Fallback method if the first method fails
     MAC_ADDRESS=$(ip link | grep -E 'eth|wlan' | head -n 1 | awk '{print $2}')
+
+    # If still empty, provide a manual option
+    if [ -z "$MAC_ADDRESS" ]; then
+        echo "Could not automatically detect MAC address."
+        echo -n "Please enter device ID manually: "
+        read MAC_ADDRESS </dev/tty
+    fi
 fi
 
-echo "Detected device MAC address: $MAC_ADDRESS"
+echo "Using device MAC address: $MAC_ADDRESS"
+echo ""
 
 # Update .env file with new values but preserve other settings
 if [ -f "$ENV_FILE" ]; then
     # Update specific values in the existing .env file
-    sed -i "s/^MQTT_BROKER_URL=.*/MQTT_BROKER_URL=$MQTT_BROKER_URL/" "$ENV_FILE"
-    sed -i "s/^MQTT_USERNAME=.*/MQTT_USERNAME=$MQTT_USERNAME/" "$ENV_FILE"
-    sed -i "s/^MQTT_PASSWORD=.*/MQTT_PASSWORD=$MQTT_PASSWORD/" "$ENV_FILE"
-    sed -i "s/^SPECIFIC_DEVICE_ID=.*/SPECIFIC_DEVICE_ID=$MAC_ADDRESS/" "$ENV_FILE"
+    sed -i "s|^MQTT_BROKER_URL=.*|MQTT_BROKER_URL=$MQTT_BROKER_URL|" "$ENV_FILE"
+    sed -i "s|^MQTT_USERNAME=.*|MQTT_USERNAME=$MQTT_USERNAME|" "$ENV_FILE"
+    sed -i "s|^MQTT_PASSWORD=.*|MQTT_PASSWORD=$MQTT_PASSWORD|" "$ENV_FILE"
+    sed -i "s|^SPECIFIC_DEVICE_ID=.*|SPECIFIC_DEVICE_ID=$MAC_ADDRESS|" "$ENV_FILE"
 else
     # Create a new .env file
     cat > "$ENV_FILE" << EOF
 MQTT_BROKER_URL=$MQTT_BROKER_URL
 MQTT_BROKER_PORT=8883
-MQTT_CLIENT_ID=einkframe-client-node
+MQTT_CLIENT_ID=einkframe-client-
 MQTT_USERNAME=$MQTT_USERNAME
 MQTT_PASSWORD=$MQTT_PASSWORD
 MQTT_TOPIC_IMAGE_DISPLAY=device/+/image/display
@@ -86,7 +100,8 @@ EOF
 fi
 
 echo "Environment configuration updated."
-
+echo ""
+echo "===== Service Installation ====="
 echo "Installing einkframe-client-node as a systemd service..."
 
 # Create systemd service file
@@ -122,6 +137,8 @@ systemctl enable $SERVICE_NAME
 # Start the service
 systemctl start $SERVICE_NAME
 
+echo ""
+echo "===== Installation Complete ====="
 echo "Service installed and started successfully!"
 echo "Service status:"
 systemctl status $SERVICE_NAME
