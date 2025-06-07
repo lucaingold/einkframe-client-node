@@ -15,18 +15,38 @@ class MQTTClient {
    */
   connect() {
     console.log(`Connecting to MQTT broker at ${config.mqtt.broker.url}`);
+    console.log(`Using client ID: ${config.mqtt.options.clientId}`);
 
-    this.client = mqtt.connect(
-      `mqtts://${config.mqtt.broker.url}`,
-      { ...config.mqtt.options, port: config.mqtt.broker.port }
-    );
+    try {
+      this.client = mqtt.connect(
+        `mqtts://${config.mqtt.broker.url}`,
+        { ...config.mqtt.options, port: config.mqtt.broker.port }
+      );
 
-    // Set up event handlers
-    this.client.on('connect', () => this.handleConnect());
-    this.client.on('message', (topic, message) => this.handleMessage(topic, message));
-    this.client.on('error', (err) => this.handleError(err));
-    this.client.on('close', () => this.handleClose());
-    this.client.on('reconnect', () => this.handleReconnect());
+      // Set up event handlers
+      this.client.on('connect', () => this.handleConnect());
+      this.client.on('message', (topic, message) => this.handleMessage(topic, message));
+      this.client.on('error', (err) => this.handleError(err));
+      this.client.on('close', () => this.handleClose());
+      this.client.on('reconnect', () => this.handleReconnect());
+
+      // Add more detailed connection problem handling
+      this.client.on('disconnect', () => console.log('Disconnected from MQTT broker'));
+      this.client.on('offline', () => console.log('MQTT client is offline'));
+
+      // Add connection timeout handling
+      setTimeout(() => {
+        if (!this.client.connected) {
+          console.error('MQTT connection timeout - could not connect within 30 seconds');
+          console.error('Please check your credentials and network connection');
+          console.error('Broker URL:', config.mqtt.broker.url);
+          console.error('Username:', config.mqtt.options.username);
+          console.error('Password:', config.mqtt.options.password ? '[PROVIDED]' : '[EMPTY]');
+        }
+      }, 30000);
+    } catch (error) {
+      console.error('Error creating MQTT connection:', error);
+    }
   }
 
   /**
@@ -77,7 +97,17 @@ class MQTTClient {
    * @param {Error} err - The error object
    */
   handleError(err) {
-    console.error('MQTT client error:', err);
+    console.error('MQTT client error:', err.message);
+    console.error('Error details:', err);
+
+    // Common error troubleshooting tips
+    if (err.message.includes('not authorized')) {
+      console.error('Authentication failed. Please check your username and password.');
+    } else if (err.message.includes('connection refused')) {
+      console.error('Connection refused. Please check your broker URL and port.');
+    } else if (err.message.includes('SSL')) {
+      console.error('SSL/TLS error. There might be an issue with the secure connection.');
+    }
   }
 
   /**
