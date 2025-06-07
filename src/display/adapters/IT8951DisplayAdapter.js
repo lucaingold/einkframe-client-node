@@ -44,6 +44,9 @@ class IT8951DisplayAdapter extends BaseDisplayAdapter {
 
       console.log(`Processing image for e-ink display, size: ${imageData.length} bytes`);
 
+      // Process image to adjust brightness using the base class method
+      const brightnessAdjustedImage = await this.processImage(imageData);
+
       // Configure the display
       this.display.config.BPP = config.display.bpp;
 
@@ -52,7 +55,7 @@ class IT8951DisplayAdapter extends BaseDisplayAdapter {
 
       // Convert image to raw grayscale buffer with correct size for the display
       const sharp = require('sharp');
-      const processedImage = await sharp(imageData)
+      const processedImage = await sharp(brightnessAdjustedImage)
         .resize(width, height, { fit: 'contain', background: { r: 255, g: 255, b: 255 } })
         .grayscale()
         .raw()

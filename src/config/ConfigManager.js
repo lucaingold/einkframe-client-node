@@ -35,7 +35,9 @@ class ConfigManager {
       maxBufferSize: 32797,
       align4Bytes: true,
       vcom: 2270,
-      bpp: 4 // 4 bits per pixel, 16 grayscale levels
+      bpp: 4, // 4 bits per pixel, 16 grayscale levels
+      // Brightness factor (1.0 = normal, >1.0 = brighter, <1.0 = darker)
+      brightness: process.env.DISPLAY_BRIGHTNESS ? parseFloat(process.env.DISPLAY_BRIGHTNESS) : 1.0
     };
 
     // GPIO Configuration

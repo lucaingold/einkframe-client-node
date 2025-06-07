@@ -63,6 +63,9 @@ class MacDisplayAdapter extends BaseDisplayAdapter {
 
       console.log(`Processing image for saving, size: ${imageData.length} bytes`);
 
+      // Process image to adjust brightness using the base class method
+      const processedImageData = await this.processImage(imageData);
+
       // Use sanitized device ID for the path
       const savePath = path.resolve(process.env.IMAGE_SAVE_PATH || './images');
       const sanitizedDeviceId = this.sanitizeDeviceId(config.device.id);
@@ -70,7 +73,7 @@ class MacDisplayAdapter extends BaseDisplayAdapter {
       const imagePath = path.join(devicePath, `latest_image.jpg`);
 
       // Convert and save image
-      await sharp(imageData)
+      await sharp(processedImageData)
         .jpeg({ quality: 90 })
         .toFile(imagePath);
 
