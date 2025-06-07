@@ -24,8 +24,45 @@ ENV_FILE="$APP_DIR/.env"
 clear
 echo "╔════════════════════════════════════════╗"
 echo "║     einkframe Service Installation     ║"
-echo "╚════════════════════════��═══════════════╝"
+echo "╚════════════════════════════════════════╝"
 echo
+
+# Check if running on a Raspberry Pi
+IS_RASPBERRY_PI=false
+if [ -f /proc/cpuinfo ] && grep -q "Raspberry Pi" /proc/cpuinfo; then
+    IS_RASPBERRY_PI=true
+fi
+
+if [ -f /etc/os-release ] && grep -q "raspbian" /etc/os-release; then
+    IS_RASPBERRY_PI=true
+fi
+
+# If we detect Raspberry Pi, check and enable SPI if needed
+if $IS_RASPBERRY_PI; then
+    echo "Raspberry Pi detected. Checking SPI configuration..."
+
+    # Check if SPI is already enabled
+    if grep -q "^dtparam=spi=on" /boot/config.txt; then
+        echo "✓ SPI is already enabled"
+    else
+        echo "Enabling SPI interface..."
+
+        # Try raspi-config if available
+        if command -v raspi-config >/dev/null 2>&1; then
+            # Enable SPI using raspi-config non-interactive mode
+            raspi-config nonint do_spi 0
+            echo "✓ SPI enabled via raspi-config"
+        else
+            # Manual method if raspi-config is not available
+            echo "dtparam=spi=on" >> /boot/config.txt
+            echo "✓ SPI enabled by modifying /boot/config.txt"
+        fi
+
+        echo "NOTE: A reboot is required for SPI changes to take effect."
+        echo "The installation will continue, but you should reboot your system afterwards."
+        echo
+    fi
+fi
 
 # Find the Node.js executable - handle NVM and other installations
 # First try the user's Node if installed via NVM

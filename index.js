@@ -6,6 +6,7 @@
 
 const DisplayController = require('./src/display/DisplayController');
 const MQTTClient = require('./src/mqtt/MQTTClient');
+const GPIOHandler = require('./src/gpio/GPIOHandler');
 const config = require('./src/config/ConfigManager');
 
 class Application {
@@ -14,6 +15,8 @@ class Application {
     this.mqttClient = new MQTTClient({
       handleImageMessage: this.handleImageMessage.bind(this)
     });
+    this.gpioHandler = new GPIOHandler();
+    this.imageDisplayed = false;
   }
 
   /**
@@ -25,6 +28,9 @@ class Application {
 
     // Initialize display
     this.displayController.init();
+
+    // Initialize GPIO handler for shutdown switch
+    this.gpioHandler.init();
 
     // Connect to MQTT broker
     this.mqttClient.connect();
@@ -40,7 +46,19 @@ class Application {
    * @param {Buffer} imageData - The image data from MQTT
    */
   async handleImageMessage(imageData) {
-    await this.displayController.displayImage(imageData);
+    try {
+      console.log('Displaying image on e-ink screen');
+      await this.displayController.displayImage(imageData);
+      this.imageDisplayed = true;
+
+      // Check if shutdown switch is on and this is the first image displayed
+      if (this.imageDisplayed && this.gpioHandler.isShutdownSwitchOn()) {
+        console.log('First image displayed and shutdown switch is ON');
+        this.gpioHandler.shutdownSystem();
+      }
+    } catch (error) {
+      console.error('Error displaying image:', error);
+    }
   }
 
   /**
@@ -52,6 +70,7 @@ class Application {
 
       await this.mqttClient.disconnect();
       this.displayController.close();
+      this.gpioHandler.close();
 
       process.exit(0);
     });

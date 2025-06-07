@@ -37,6 +37,14 @@ class ConfigManager {
       vcom: 2270,
       bpp: 4 // 4 bits per pixel, 16 grayscale levels
     };
+
+    // GPIO Configuration
+    this.gpio = {
+      // Enable or disable shutdown via GPIO switch feature
+      enableShutdownSwitch: process.env.ENABLE_GPIO_SHUTDOWN === 'true',
+      // GPIO pin number for shutdown switch (BCM numbering)
+      shutdownPin: 27
+    };
   }
 }
 
