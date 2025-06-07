@@ -9,9 +9,8 @@ if [ "$(id -u)" -ne 0 ]; then
     exit 1
 fi
 
-# Get the absolute path of the application directory and Node.js binary
+# Get the absolute path of the application directory
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-NODE_PATH="$(which node)"
 SERVICE_NAME="einkframe"
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
 ENV_FILE="$APP_DIR/.env"
@@ -20,6 +19,57 @@ clear
 echo "╔════════════════════════════════════════╗"
 echo "║     einkframe Service Installation     ║"
 echo "╚════════════════════════════════════════╝"
+echo
+
+# Find the Node.js executable - handle NVM and other installations
+# First try the user's Node if installed via NVM
+if [ -n "$SUDO_USER" ]; then
+    USER_HOME=$(eval echo ~$SUDO_USER)
+    if [ -f "$USER_HOME/.nvm/nvm.sh" ]; then
+        echo "NVM detected, looking for Node.js..."
+        # Source NVM for the original user
+        export NVM_DIR="$USER_HOME/.nvm"
+        # This will load nvm for the sudo environment
+        [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    fi
+fi
+
+# Try multiple methods to find Node.js
+NODE_PATHS=(
+    "$(which node 2>/dev/null)"                          # Standard path
+    "/home/einkframe/.nvm/versions/node/*/bin/node"      # NVM path
+    "/usr/local/bin/node"                                # Common location
+    "/usr/bin/node"                                      # Another common location
+)
+
+NODE_PATH=""
+for path in "${NODE_PATHS[@]}"; do
+    # For NVM wildcard paths, get the latest version
+    if [[ $path == *"*"* ]]; then
+        latest_node=$(ls -t $path 2>/dev/null | head -n 1)
+        if [ -n "$latest_node" ] && [ -x "$latest_node" ]; then
+            NODE_PATH=$latest_node
+            break
+        fi
+    elif [ -x "$path" ]; then
+        NODE_PATH=$path
+        break
+    fi
+done
+
+# If still not found, ask the user
+if [ -z "$NODE_PATH" ]; then
+    echo "Could not automatically find Node.js."
+    read -p "Please enter the full path to your Node.js executable: " NODE_PATH
+    if [ ! -x "$NODE_PATH" ]; then
+        echo "Error: The provided path is not an executable file."
+        exit 1
+    fi
+fi
+
+# Display Node.js information
+echo "Using Node.js: $NODE_PATH"
+echo "Version: $($NODE_PATH --version)"
 echo
 
 # Check if .env file exists and create a backup
@@ -116,7 +166,7 @@ echo
 
 echo "Installing systemd service..."
 
-# Create systemd service file
+# Create systemd service file with the full path to Node.js executable
 cat > $SERVICE_FILE << EOF
 [Unit]
 Description=einkframe MQTT Client
@@ -141,8 +191,18 @@ EOF
 chmod 644 $SERVICE_FILE > /dev/null 2>&1
 systemctl daemon-reload > /dev/null 2>&1
 systemctl enable $SERVICE_NAME > /dev/null 2>&1
-systemctl restart $SERVICE_NAME > /dev/null 2>&1
 
+# Make sure the script is not trying to directly execute index.js
+chmod 644 "$APP_DIR/index.js" > /dev/null 2>&1
+echo "✓ File permissions set correctly"
+
+# Create images directory if it doesn't exist
+mkdir -p "$APP_DIR/images" > /dev/null 2>&1
+chmod -R 755 "$APP_DIR/images" > /dev/null 2>&1
+echo "✓ Image directory configured"
+
+# Restart the service
+systemctl restart $SERVICE_NAME > /dev/null 2>&1
 echo "✓ Service installed and started"
 echo
 
