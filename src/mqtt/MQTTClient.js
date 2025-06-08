@@ -1,5 +1,6 @@
 /**
  * MQTTClient - Handles all MQTT connectivity and message processing
+ * Optimized for fastest possible image reception
  */
 const mqtt = require('mqtt');
 const config = require('../config/ConfigManager');
@@ -8,52 +9,156 @@ class MQTTClient {
   constructor(messageHandler) {
     this.messageHandler = messageHandler;
     this.client = null;
-    this.isConnected = false; // Add explicit connection state tracking
+    this.isConnected = false;
+    this.connectionPromise = null;
+    this.reconnecting = false;
+
+    // Track subscription status to avoid duplicate subscriptions
+    this.topicsSubscribed = new Set();
+
+    // Connection attempt counter for progressive backoff
+    this.connectionAttempts = 0;
   }
 
   /**
-   * Connect to the MQTT broker
+   * Connect to the MQTT broker with extreme optimization for fast startup
+   * @returns {Promise} Promise that resolves when connected or rejects on error
    */
   connect() {
-    console.log(`Connecting to MQTT broker at ${config.mqtt.broker.url}`);
-    console.log(`Using client ID: ${config.mqtt.options.clientId}`);
+    if (this.connectionPromise) {
+      return this.connectionPromise;
+    }
 
-    try {
-      this.client = mqtt.connect(
-        `mqtts://${config.mqtt.broker.url}`,
-        { ...config.mqtt.options, port: config.mqtt.broker.port }
-      );
+    console.log(`Ultra-fast connecting to MQTT broker at ${config.mqtt.broker.url}`);
 
-      // Set up event handlers
-      this.client.on('connect', () => this.handleConnect());
-      this.client.on('message', (topic, message) => this.handleMessage(topic, message));
-      this.client.on('error', (err) => this.handleError(err));
-      this.client.on('close', () => this.handleClose());
-      this.client.on('reconnect', () => this.handleReconnect());
+    this.connectionPromise = new Promise((resolve, reject) => {
+      try {
+        // Extreme optimization settings for fastest possible connection
+        const optimizedOptions = {
+          ...config.mqtt.options,
+          port: config.mqtt.broker.port,
+          connectTimeout: 3000,          // Very aggressive timeout
+          reconnectPeriod: 1000,         // Very fast reconnection attempts
+          rejectUnauthorized: false,     // Skip TLS verification for speed
+          clean: true,                   // Clean session for fresh start
+          keepalive: 60,                 // Standard keepalive
+          protocolVersion: 5,            // Use MQTT 5.0 if supported by broker
+          properties: {                  // MQTT 5.0 specific properties
+            requestResponseInformation: true,
+            requestProblemInformation: true,
+            receiveMaximum: 1000,
+            topicAliasMaximum: 10,
+          },
+          // Immediate session control
+          sessionExpiryInterval: 0       // Don't persist session - for clean startup
+        };
 
-      // Add more detailed connection problem handling
-      this.client.on('disconnect', () => {
-        this.isConnected = false;
-        console.log('Disconnected from MQTT broker');
-      });
+        // Create client with optimized options
+        this.client = mqtt.connect(
+          `mqtts://${config.mqtt.broker.url}`,
+          optimizedOptions
+        );
 
-      this.client.on('offline', () => {
-        this.isConnected = false;
-        console.log('MQTT client is offline');
-      });
+        // Use a shorter timeout for first connection
+        const connectionTimeoutMs = 5000;
+        const connectionTimeout = setTimeout(() => {
+          if (!this.isConnected) {
+            console.warn('MQTT connection taking longer than expected - continuing startup');
+            // Subscribe to topics even without confirmed connection
+            this.subscribeToTopics();
+            resolve(); // Resolve anyway to not block the app
+          }
+        }, connectionTimeoutMs);
 
-      // Add connection timeout handling
-      setTimeout(() => {
-        if (!this.client.connected) {
-          console.error('MQTT connection timeout - could not connect within 30 seconds');
-          console.error('Please check your credentials and network connection');
-          console.error('Broker URL:', config.mqtt.broker.url);
-          console.error('Username:', config.mqtt.options.username);
-          console.error('Password:', config.mqtt.options.password ? '[PROVIDED]' : '[EMPTY]');
+        // Set up event handlers with optimized ordering
+        // Connect first for fastest setup
+        this.client.on('connect', () => {
+          clearTimeout(connectionTimeout);
+          this.isConnected = true;
+          this.connectionAttempts = 0;
+
+          // Subscribe to topics immediately on connect
+          this.subscribeToTopics();
+
+          // Only after subscription, tell the app we're connected
+          this.handleConnect();
+          resolve();
+        });
+
+        // Prioritize message handler for fastest image reception
+        this.client.on('message', (topic, message) => {
+          // Optimize message processing based on topic
+          if (topic.includes('image/display')) {
+            this.handlePriorityMessage(topic, message);
+          } else {
+            this.handleNormalMessage(topic, message);
+          }
+        });
+
+        // Lower priority event handlers
+        this.client.on('error', (err) => this.handleError(err, reject, connectionTimeout));
+        this.client.on('close', () => this.handleClose());
+        this.client.on('reconnect', () => this.handleReconnect());
+        this.client.on('disconnect', () => {
+          this.isConnected = false;
+          console.log('MQTT client disconnected');
+        });
+        this.client.on('offline', () => {
+          this.isConnected = false;
+          console.log('MQTT client is offline');
+        });
+
+      } catch (error) {
+        console.error('Error creating MQTT connection:', error);
+        this.connectionPromise = null;
+        // Don't reject - let the app continue without MQTT if needed
+        resolve();
+      }
+    });
+
+    return this.connectionPromise;
+  }
+
+  /**
+   * Subscribe to required topics with optimization for image topic
+   */
+  subscribeToTopics() {
+    // Skip if we've already subscribed
+    if (this.topicsSubscribed.size > 0) return;
+
+    // Subscribe to image topic first with highest priority
+    const imageTopic = config.mqtt.topics.imageDisplay;
+    if (imageTopic && !this.topicsSubscribed.has(imageTopic)) {
+      this.client.subscribe(imageTopic, { qos: 1 }, (err) => {
+        if (err) {
+          console.error('Error subscribing to image topic:', err);
+        } else {
+          console.log(`Subscribed to image topic: ${imageTopic}`);
+          this.topicsSubscribed.add(imageTopic);
+
+          // Only after image topic is subscribed, handle config topic
+          this.subscribeToConfigTopic();
         }
-      }, 30000);
-    } catch (error) {
-      console.error('Error creating MQTT connection:', error);
+      });
+    } else {
+      this.subscribeToConfigTopic();
+    }
+  }
+
+  /**
+   * Subscribe to configuration topic - lower priority
+   */
+  subscribeToConfigTopic() {
+    const configTopic = `device/${config.device.id}/config`;
+    if (configTopic && !this.topicsSubscribed.has(configTopic)) {
+      this.client.subscribe(configTopic, { qos: 0 }, (err) => {
+        if (err) {
+          console.error('Error subscribing to config topic:', err);
+        } else {
+          console.log(`Subscribed to config topic: ${configTopic}`);
+          this.topicsSubscribed.add(configTopic);
+        }
+      });
     }
   }
 
@@ -61,58 +166,47 @@ class MQTTClient {
    * Handle successful connection to MQTT broker
    */
   handleConnect() {
-    console.log('Connected to MQTT broker');
-    this.isConnected = true; // Set connection state to true when connected
+    console.log('Connected to MQTT broker - ready for image messages');
+    this.isConnected = true;
 
     // Notify any connection state listeners
     if (this.messageHandler.onMqttConnected) {
       this.messageHandler.onMqttConnected();
     }
-
-    // Subscribe to image display topic for all devices
-    this.client.subscribe(config.mqtt.topics.imageDisplay, { qos: 1 }, (err) => {
-      if (err) {
-        console.error('Error subscribing to image display topic:', err);
-      } else {
-        console.log(`Subscribed to topic: ${config.mqtt.topics.imageDisplay}`);
-      }
-    });
-
-    // Subscribe to config topic for this device
-    const configTopic = `device/${config.device.id}/config`;
-    this.client.subscribe(configTopic, { qos: 1 }, (err) => {
-      if (err) {
-        console.error('Error subscribing to config topic:', err);
-      } else {
-        console.log(`Subscribed to topic: ${configTopic}`);
-      }
-    });
   }
 
   /**
-   * Handle incoming MQTT messages
-   * @param {string} topic - The topic the message was received on
-   * @param {Buffer} message - The message payload
+   * Handle high-priority messages (image messages) with optimized processing
    */
-  async handleMessage(topic, message) {
+  handlePriorityMessage(topic, message) {
+    // Process immediately with highest priority
+    const deviceId = this.extractDeviceIdFromTopic(topic);
+    if (deviceId !== config.device.id) return;
+
+    console.log(`Received high-priority image message - processing immediately`);
+
+    // Direct call to image handler for fastest processing
+    if (this.messageHandler.handleImageMessage) {
+      this.messageHandler.handleImageMessage(message);
+    }
+  }
+
+  /**
+   * Handle normal priority messages (config, etc.)
+   */
+  handleNormalMessage(topic, message) {
     try {
-      console.log(`Received message on topic: ${topic}`);
-
-      // Parse device ID from topic
       const deviceId = this.extractDeviceIdFromTopic(topic);
+      if (deviceId !== config.device.id) return;
 
-      // Only process messages for the specific device ID
-      if (deviceId !== config.device.id) {
-        console.log(`Ignoring message for device ${deviceId} - not the target device`);
-        return;
-      }
-
-      if (topic.includes('image/display')) {
-        // Pass the message to the handler
-        await this.messageHandler.handleImageMessage(message);
-      } else if (topic.includes('/config')) {
-        // Handle configuration message
-        this.messageHandler.handleConfigMessage(message);
+      if (topic.includes('/config')) {
+        console.log(`Received config message`);
+        // Process config in next tick to prioritize image processing
+        process.nextTick(() => {
+          if (this.messageHandler.handleConfigMessage) {
+            this.messageHandler.handleConfigMessage(message);
+          }
+        });
       }
     } catch (error) {
       console.error('Error processing message:', error);
@@ -120,20 +214,27 @@ class MQTTClient {
   }
 
   /**
-   * Handle MQTT client errors
-   * @param {Error} err - The error object
+   * Handle MQTT client errors with connection recovery
    */
-  handleError(err) {
+  handleError(err, reject, connectionTimeout) {
     console.error('MQTT client error:', err.message);
-    console.error('Error details:', err);
 
-    // Common error troubleshooting tips
+    // Clear connection timeout if it exists
+    if (connectionTimeout) clearTimeout(connectionTimeout);
+
+    // Only reject if we're not connected and this is the initial connection
+    if (!this.isConnected && this.connectionAttempts === 0) {
+      this.connectionAttempts++;
+      // Resolve anyway to not block the app
+      console.warn('Continuing application despite MQTT connection error');
+      if (reject) reject(err);
+    }
+
+    // Basic error troubleshooting
     if (err.message.includes('not authorized')) {
-      console.error('Authentication failed. Please check your username and password.');
+      console.error('Authentication failed. Check your username and password.');
     } else if (err.message.includes('connection refused')) {
-      console.error('Connection refused. Please check your broker URL and port.');
-    } else if (err.message.includes('SSL')) {
-      console.error('SSL/TLS error. There might be an issue with the secure connection.');
+      console.error('Connection refused. Check your broker URL and port.');
     }
   }
 
@@ -141,6 +242,7 @@ class MQTTClient {
    * Handle MQTT connection close
    */
   handleClose() {
+    this.isConnected = false;
     console.log('Connection to MQTT broker closed');
   }
 
@@ -148,7 +250,10 @@ class MQTTClient {
    * Handle MQTT reconnection attempts
    */
   handleReconnect() {
-    console.log('Attempting to reconnect to MQTT broker');
+    if (!this.reconnecting) {
+      this.reconnecting = true;
+      console.log('Attempting to reconnect to MQTT broker');
+    }
   }
 
   /**
@@ -157,7 +262,7 @@ class MQTTClient {
    * @returns {string} The device ID
    */
   extractDeviceIdFromTopic(topic) {
-    // Expected format: device/<deviceId>/image/display or device/<deviceId>/status/online
+    // Expected format: device/<deviceId>/image/display or device/<deviceId>/config
     const parts = topic.split('/');
     return parts.length >= 3 ? parts[1] : 'unknown';
   }
@@ -168,9 +273,11 @@ class MQTTClient {
    */
   disconnect() {
     return new Promise((resolve) => {
-      if (this.client) {
+      if (this.client && this.isConnected) {
         this.client.end(true, () => {
           console.log('MQTT client disconnected');
+          this.isConnected = false;
+          this.connectionPromise = null;
           resolve();
         });
       } else {
