@@ -8,6 +8,7 @@ class MQTTClient {
   constructor(messageHandler) {
     this.messageHandler = messageHandler;
     this.client = null;
+    this.isConnected = false; // Add explicit connection state tracking
   }
 
   /**
@@ -31,8 +32,15 @@ class MQTTClient {
       this.client.on('reconnect', () => this.handleReconnect());
 
       // Add more detailed connection problem handling
-      this.client.on('disconnect', () => console.log('Disconnected from MQTT broker'));
-      this.client.on('offline', () => console.log('MQTT client is offline'));
+      this.client.on('disconnect', () => {
+        this.isConnected = false;
+        console.log('Disconnected from MQTT broker');
+      });
+
+      this.client.on('offline', () => {
+        this.isConnected = false;
+        console.log('MQTT client is offline');
+      });
 
       // Add connection timeout handling
       setTimeout(() => {
@@ -54,6 +62,12 @@ class MQTTClient {
    */
   handleConnect() {
     console.log('Connected to MQTT broker');
+    this.isConnected = true; // Set connection state to true when connected
+
+    // Notify any connection state listeners
+    if (this.messageHandler.onMqttConnected) {
+      this.messageHandler.onMqttConnected();
+    }
 
     // Subscribe to image display topic for all devices
     this.client.subscribe(config.mqtt.topics.imageDisplay, { qos: 1 }, (err) => {
