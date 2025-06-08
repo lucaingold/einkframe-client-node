@@ -5,6 +5,25 @@
  * Optimized for fastest possible startup and image display.
  */
 
+// Track performance metrics
+const startTime = process.hrtime();
+const performanceMetrics = {
+  startTimestamp: Date.now(),
+  displayInitialized: 0,
+  mqttConnected: 0,
+  imageReceived: 0,
+  imageDisplayed: 0,
+  appFullyInitialized: 0
+};
+
+// Log elapsed time since startup in ms
+function logPerformance(label) {
+  const elapsed = process.hrtime(startTime);
+  const elapsedMs = (elapsed[0] * 1000 + elapsed[1] / 1000000).toFixed(2);
+  console.log(`[PERFORMANCE] ${label}: ${elapsedMs}ms`);
+  return elapsedMs;
+}
+
 // Pre-optimized with lazy loading
 const config = require('./src/config/ConfigManager');
 const DisplayController = require('./src/display/DisplayController');
@@ -22,6 +41,9 @@ class Application {
     this.configProcessed = false;
     this.shuttingDown = false;
     this.displayInitialized = false;
+
+    // Performance tracking
+    logPerformance('Application constructor completed');
   }
 
   /**
@@ -42,7 +64,33 @@ class Application {
     // Set up clean shutdown (non-blocking)
     this.setupGracefulShutdown();
 
+    // Mark application as fully initialized
+    performanceMetrics.appFullyInitialized = Date.now() - performanceMetrics.startTimestamp;
     console.log('Application startup complete - ready for image display');
+    console.log(`[PERFORMANCE] App fully initialized in ${performanceMetrics.appFullyInitialized}ms`);
+
+    // Print performance report
+    this.logPerformanceReport();
+
+    return true;
+  }
+
+  /**
+   * Log a complete performance report
+   */
+  logPerformanceReport() {
+    console.log('\n--- PERFORMANCE REPORT ---');
+    console.log(`Display initialization: ${performanceMetrics.displayInitialized}ms`);
+    console.log(`MQTT connection: ${performanceMetrics.mqttConnected > 0 ? performanceMetrics.mqttConnected + 'ms' : 'not yet connected'}`);
+    console.log(`Image reception: ${performanceMetrics.imageReceived > 0 ? performanceMetrics.imageReceived + 'ms' : 'no image received yet'}`);
+    console.log(`Image displayed: ${performanceMetrics.imageDisplayed > 0 ? performanceMetrics.imageDisplayed + 'ms' : 'no image displayed yet'}`);
+    console.log(`App fully initialized: ${performanceMetrics.appFullyInitialized}ms`);
+    console.log('-------------------------\n');
+
+    // Schedule future performance report for image display if not yet received
+    if (performanceMetrics.imageDisplayed === 0) {
+      setTimeout(() => this.logPerformanceReport(), 10000);
+    }
   }
 
   /**
@@ -50,9 +98,15 @@ class Application {
    */
   async initDisplayFast() {
     try {
+      const startDisplayInit = process.hrtime();
       console.log('Initializing display with highest priority');
       await this.displayController.init();
       this.displayInitialized = true;
+
+      // Track performance
+      performanceMetrics.displayInitialized = Date.now() - performanceMetrics.startTimestamp;
+      logPerformance('Display initialization completed');
+
       console.log('Display ready for immediate rendering');
     } catch (error) {
       console.error('Display initialization error:', error);
@@ -75,6 +129,8 @@ class Application {
     this.mqttClient.connect().catch(err => {
       console.error('MQTT connection error, will retry:', err.message);
     });
+
+    logPerformance('MQTT client created and connection initiated');
   }
 
   /**
@@ -88,6 +144,7 @@ class Application {
       }
       this.gpioHandler = new GPIOHandler();
       this.gpioHandler.init();
+      logPerformance('GPIO initialization completed');
     }, 1000);
   }
 
@@ -95,7 +152,9 @@ class Application {
    * Handler for MQTT connection established event
    */
   handleMqttConnected() {
-    console.log('MQTT connection established - ready for images');
+    performanceMetrics.mqttConnected = Date.now() - performanceMetrics.startTimestamp;
+    console.log(`MQTT connection established in ${performanceMetrics.mqttConnected}ms - ready for images`);
+    logPerformance('MQTT connected');
     this.checkAutoShutdown();
   }
 
@@ -104,7 +163,10 @@ class Application {
    * @param {Buffer} imageData - The image data from MQTT
    */
   async handleImageMessage(imageData) {
-    console.log('Received image - displaying with high priority');
+    // Record image received time
+    performanceMetrics.imageReceived = Date.now() - performanceMetrics.startTimestamp;
+    console.log(`Received image after ${performanceMetrics.imageReceived}ms - displaying with high priority`);
+    logPerformance('Image received');
 
     try {
       // Ensure display is initialized
@@ -114,9 +176,20 @@ class Application {
       }
 
       // Display image immediately
+      const imageDisplayStart = process.hrtime();
       await this.displayController.displayImage(imageData);
+      const elapsed = process.hrtime(imageDisplayStart);
+      const renderTimeMs = (elapsed[0] * 1000 + elapsed[1] / 1000000).toFixed(2);
+
+      // Record performance metrics
       this.imageProcessed = true;
-      console.log('Image displayed successfully');
+      performanceMetrics.imageDisplayed = Date.now() - performanceMetrics.startTimestamp;
+
+      console.log(`Image displayed in ${renderTimeMs}ms (total time from startup: ${performanceMetrics.imageDisplayed}ms)`);
+      logPerformance('Image displayed');
+
+      // Log complete performance report now that image is displayed
+      this.logPerformanceReport();
 
       // Check auto-shutdown
       this.checkAutoShutdown();
@@ -153,10 +226,11 @@ class Application {
    */
   handleConfigMessage(messageData) {
     try {
-      const configData = JSON.parse(messageData.toString());
       console.log('Received configuration update');
+      logPerformance('Config message received');
 
       // Update configuration
+      const configData = JSON.parse(messageData.toString());
       config.updateConfig(configData);
       this.configProcessed = true;
 
