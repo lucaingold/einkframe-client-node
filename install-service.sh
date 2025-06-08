@@ -313,12 +313,16 @@ After=network.target
 Type=simple
 User=root
 WorkingDirectory=$APP_DIR
+# Preload node binary and wait a moment before starting the app
+ExecStartPre=/bin/sh -c "cat \$(which node) > /dev/null && sleep 0.1"
 ExecStart=$NODE_PATH $APP_DIR/index.js
 Restart=on-failure
 RestartSec=10
 StandardOutput=syslog
 StandardError=syslog
 SyslogIdentifier=einkframe
+# Give higher priority to this service
+Nice=-10
 
 [Install]
 WantedBy=multi-user.target
