@@ -27,7 +27,7 @@ function logPerformance(label) {
 const config = require('./src/config/ConfigManager');
 const DisplayController = require('./src/display/DisplayController');
 const MQTTClient = require('./src/mqtt/MQTTClient');
-const imageBuffer = require('./src/util/ImageBuffer');
+const imageBuffer = require('./src/util/ImageBuffer.js'); // Add .js extension to fix path resolution
 
 // Defer non-critical requires
 let GPIOHandler = null;
