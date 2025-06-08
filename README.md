@@ -27,7 +27,7 @@ This client application connects to an MQTT broker and subscribes to specific to
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/yourusername/einkframe-client-node.git
+git clone git@github.com:lucaingold/einkframe-client-node.git
 cd einkframe-client-node
 ```
 
@@ -59,6 +59,7 @@ SPECIFIC_DEVICE_ID=your-device-id
 sudo apt-get install build-essential
 sudo apt install openssh-client
 ssh-keygen -t rsa -b 4096
+cat /root/.ssh/id_rsa.pub
 chmod +x install-service.sh
 sudo ./install-service.sh
 ```
