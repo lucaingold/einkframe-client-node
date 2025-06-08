@@ -20,6 +20,7 @@ class Application {
     this.imageProcessed = false;  // Track if at least one image message has been processed
     this.configProcessed = false; // Track if at least one config message has been processed
     this.shuttingDown = false;    // Prevent multiple shutdown attempts
+    this.mqttConnected = false;   // Track if MQTT is properly connected
   }
 
   /**
@@ -35,6 +36,9 @@ class Application {
     // Initialize GPIO handler (but don't rely on it for auto-shutdown)
     this.gpioHandler.init();
 
+    // Setup MQTT event handlers to track connection status
+    this.setupMqttEventHandlers();
+
     // Connect to MQTT broker
     this.mqttClient.connect();
 
@@ -42,6 +46,29 @@ class Application {
     this.setupGracefulShutdown();
 
     console.log('MQTT client for einkframe started');
+  }
+
+  /**
+   * Setup MQTT event handlers to track connection status
+   */
+  setupMqttEventHandlers() {
+    // Add handlers for connection status
+    if (this.mqttClient.client) {
+      this.mqttClient.client.on('connect', () => {
+        this.mqttConnected = true;
+        console.log('MQTT connection established - auto-shutdown logic enabled');
+      });
+
+      this.mqttClient.client.on('error', () => {
+        this.mqttConnected = false;
+        console.log('MQTT connection error - auto-shutdown logic disabled');
+      });
+
+      this.mqttClient.client.on('close', () => {
+        this.mqttConnected = false;
+        console.log('MQTT connection closed - auto-shutdown logic disabled');
+      });
+    }
   }
 
   /**
@@ -90,12 +117,18 @@ class Application {
    * Check if we need to auto-shutdown the system
    */
   checkAutoShutdown() {
+    // Only consider auto-shutdown if MQTT is properly connected
+    if (!this.mqttConnected) {
+      console.log('Auto-shutdown check skipped - MQTT not connected');
+      return;
+    }
+
     // Auto-shutdown is only allowed if both an image message AND a config message have been processed
     if (this.imageProcessed && this.configProcessed && config.autoShutdown.enabled) {
       console.log('Auto-shutdown conditions met: image processed, config processed, and auto-shutdown enabled');
       this.shutdownSystem();
     } else {
-      console.log(`Auto-shutdown status: image processed=${this.imageProcessed}, config processed=${this.configProcessed}, auto-shutdown enabled=${config.autoShutdown.enabled}`);
+      console.log(`Auto-shutdown status: MQTT connected=${this.mqttConnected}, image processed=${this.imageProcessed}, config processed=${this.configProcessed}, auto-shutdown enabled=${config.autoShutdown.enabled}`);
     }
   }
 

@@ -53,12 +53,25 @@ IMAGE_SAVE_PATH=./images
 SPECIFIC_DEVICE_ID=your-device-id
 ```
 
+### 4. SSH git config
+
+```bash
+sudo apt-get install build-essential
+sudo apt install openssh-client
+ssh-keygen -t rsa -b 4096
+chmod +x install-service.sh
+sudo ./install-service.sh
+```
+
+
 ### 4. Run the installation script
 
 The installation script configures your application as a systemd service that runs on startup with sudo privileges, and prompts for MQTT configuration details:
 
 ```bash
 sudo apt-get install build-essential
+sudo apt install openssh-client
+ssh-keygen -t rsa -b 4096
 chmod +x install-service.sh
 sudo ./install-service.sh
 ```
@@ -103,11 +116,31 @@ sudo journalctl -u einkframe -f
 
 ## MQTT Message Format
 
-The application listens to MQTT topics in the format `device/{device-id}/image/display` where `{device-id}` is your device's ID (MAC address by default).
+The application listens to the following MQTT topics:
 
-Image messages should be formatted as:
-- Binary payload containing the image data
-- Or JSON with a URL to download the image
+1. **Image Display Topic**: `device/{device-id}/image/display`
+   - Binary payload containing the image data
+   - Or JSON with a URL to download the image
+
+2. **Configuration Topic**: `device/{device-id}/config`
+   - JSON payload containing configuration settings
+   - Available configuration options:
+   ```json
+   {
+     "enableAutoShutdown": false,  // Set to true to enable auto-shutdown after first image
+     "displayBrightness": 1.0      // Brightness factor (1.0 = normal, >1.0 = brighter, <1.0 = darker)
+   }
+   ```
+
+### Auto-Shutdown Feature
+
+When enabled via the configuration topic, the device will automatically shut down after:
+1. A valid configuration message has been received
+2. At least one image has been displayed
+
+This feature is useful for battery-powered installations where you want the device to power off after displaying content.
+
+**Note**: Auto-shutdown is disabled by default for safety. It will only be enabled if explicitly set to `true` in a configuration message.
 
 ## Development
 

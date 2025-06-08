@@ -23,8 +23,27 @@ ENV_FILE="$APP_DIR/.env"
 
 clear
 echo "╔════════════════════════════════════════╗"
-echo "║     einkframe Service Installation     ║"
+echo "║     einkframe Installation Setup       ║"
 echo "╚════════════════════════════════════════╝"
+echo
+
+# Ask if user wants to install as a service
+INSTALL_SERVICE=false
+echo "Would you like to install einkframe as a system service?"
+echo "This will make it run automatically at startup."
+echo "  1) Yes, install as a service (recommended)"
+echo "  2) No, just set up configuration"
+echo
+echo -n "Enter your choice [1]: "
+read SERVICE_CHOICE
+SERVICE_CHOICE=${SERVICE_CHOICE:-1}
+
+if [ "$SERVICE_CHOICE" == "1" ]; then
+    INSTALL_SERVICE=true
+    echo "Will install as a system service."
+else
+    echo "Will only set up configuration."
+fi
 echo
 
 # Check if running on a Raspberry Pi or compatible system (including DietPi)
@@ -274,10 +293,17 @@ fi
 
 echo
 
-echo "Installing systemd service..."
+# Create images directory if it doesn't exist
+mkdir -p "$APP_DIR/images" > /dev/null 2>&1
+chmod -R 755 "$APP_DIR/images" > /dev/null 2>&1
+echo "✓ Image directory configured"
 
-# Create systemd service file with the full path to Node.js executable
-cat > $SERVICE_FILE << EOF
+# Only install as a service if requested
+if $INSTALL_SERVICE; then
+    echo "Installing systemd service..."
+
+    # Create systemd service file with the full path to Node.js executable
+    cat > $SERVICE_FILE << EOF
 [Unit]
 Description=einkframe MQTT Client
 After=network.target
@@ -297,33 +323,50 @@ SyslogIdentifier=einkframe
 WantedBy=multi-user.target
 EOF
 
-# Configure the service
-chmod 644 $SERVICE_FILE > /dev/null 2>&1
-systemctl daemon-reload > /dev/null 2>&1
-systemctl enable $SERVICE_NAME > /dev/null 2>&1
+    # Configure the service
+    chmod 644 $SERVICE_FILE > /dev/null 2>&1
+    systemctl daemon-reload > /dev/null 2>&1
+    systemctl enable $SERVICE_NAME > /dev/null 2>&1
 
-# Make sure the script is not trying to directly execute index.js
-chmod 644 "$APP_DIR/index.js" > /dev/null 2>&1
-echo "✓ File permissions set correctly"
+    # Make sure the script is not trying to directly execute index.js
+    chmod 644 "$APP_DIR/index.js" > /dev/null 2>&1
+    echo "✓ File permissions set correctly"
 
-# Create images directory if it doesn't exist
-mkdir -p "$APP_DIR/images" > /dev/null 2>&1
-chmod -R 755 "$APP_DIR/images" > /dev/null 2>&1
-echo "✓ Image directory configured"
+    # Restart the service
+    systemctl restart $SERVICE_NAME > /dev/null 2>&1
+    echo "✓ Service installed and started"
+    echo
 
-# Restart the service
-systemctl restart $SERVICE_NAME > /dev/null 2>&1
-echo "✓ Service installed and started"
-echo
+    echo "╔═════════════════════��══════════════════╗"
+    echo "║       Installation Complete!           ║"
+    echo "╚════════════════════════════════════════╝"
+    echo
+    echo "Service management commands:"
+    echo "• Start:    sudo systemctl start $SERVICE_NAME"
+    echo "�� Stop:     sudo systemctl stop $SERVICE_NAME"
+    echo "• Restart:  sudo systemctl restart $SERVICE_NAME"
+    echo "• Status:   sudo systemctl status $SERVICE_NAME"
+    echo "• View logs: sudo journalctl -u $SERVICE_NAME -f"
+    echo
+else
+    # Create a start script for manual execution
+    cat > "$APP_DIR/start.sh" << EOF
+#!/bin/bash
+cd "\$(dirname "\$0")"
+sudo node index.js
+EOF
 
-echo "╔════════════════════════════════════════╗"
-echo "║       Installation Complete!           ║"
-echo "╚════════════════════════════════════════╝"
-echo
-echo "Service management commands:"
-echo "• Start:    sudo systemctl start $SERVICE_NAME"
-echo "• Stop:     sudo systemctl stop $SERVICE_NAME"
-echo "• Restart:  sudo systemctl restart $SERVICE_NAME"
-echo "• Status:   sudo systemctl status $SERVICE_NAME"
-echo "• View logs: sudo journalctl -u $SERVICE_NAME -f"
-echo
+    # Make it executable
+    chmod +x "$APP_DIR/start.sh"
+
+    echo "╔════════════════════════════════════════╗"
+    echo "║       Configuration Complete!          ║"
+    echo "╚════════════════════════════════════════╝"
+    echo
+    echo "To start the application manually, run:"
+    echo "  ./start.sh"
+    echo
+    echo "You can also run it directly with:"
+    echo "  sudo node $APP_DIR/index.js"
+    echo
+fi
