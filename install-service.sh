@@ -20,6 +20,7 @@ APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SERVICE_NAME="einkframe"
 SERVICE_FILE="/etc/systemd/system/$SERVICE_NAME.service"
 ENV_FILE="$APP_DIR/.env"
+MANUAL_START_SCRIPT="$APP_DIR/run-manual.sh"  # Changed from start.sh to run-manual.sh
 
 clear
 echo "╔════════════════════════════════════════╗"
@@ -337,34 +338,56 @@ EOF
     echo "✓ Service installed and started"
     echo
 
-    echo "╔═════════════════════��══════════════════╗"
+    echo "╔════════════════════════════════════════╗"
     echo "║       Installation Complete!           ║"
     echo "╚════════════════════════════════════════╝"
     echo
     echo "Service management commands:"
     echo "• Start:    sudo systemctl start $SERVICE_NAME"
-    echo "�� Stop:     sudo systemctl stop $SERVICE_NAME"
+    echo "• Stop:     sudo systemctl stop $SERVICE_NAME"
     echo "• Restart:  sudo systemctl restart $SERVICE_NAME"
     echo "• Status:   sudo systemctl status $SERVICE_NAME"
     echo "• View logs: sudo journalctl -u $SERVICE_NAME -f"
     echo
 else
-    # Create a start script for manual execution
-    cat > "$APP_DIR/start.sh" << EOF
+    # Check if start.sh already exists and don't overwrite it
+    if [ -f "$APP_DIR/start.sh" ]; then
+        echo "Found existing start.sh script. Will not overwrite it."
+        echo "Using run-manual.sh for the simple starter script."
+
+        # Create a simple manual start script with a different name
+        cat > "$MANUAL_START_SCRIPT" << EOF
 #!/bin/bash
 cd "\$(dirname "\$0")"
 sudo node index.js
 EOF
 
-    # Make it executable
-    chmod +x "$APP_DIR/start.sh"
+        # Make it executable
+        chmod +x "$MANUAL_START_SCRIPT"
+
+        echo "Created $MANUAL_START_SCRIPT for manual execution."
+    else
+        # Create a start.sh script since it doesn't exist
+        cat > "$APP_DIR/start.sh" << EOF
+#!/bin/bash
+cd "\$(dirname "\$0")"
+sudo node index.js
+EOF
+
+        # Make it executable
+        chmod +x "$APP_DIR/start.sh"
+    fi
 
     echo "╔════════════════════════════════════════╗"
     echo "║       Configuration Complete!          ║"
     echo "╚════════════════════════════════════════╝"
     echo
     echo "To start the application manually, run:"
-    echo "  ./start.sh"
+    if [ -f "$APP_DIR/run-manual.sh" ]; then
+        echo "  ./run-manual.sh"
+    else
+        echo "  ./start.sh"
+    fi
     echo
     echo "You can also run it directly with:"
     echo "  sudo node $APP_DIR/index.js"
