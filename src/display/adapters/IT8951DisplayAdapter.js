@@ -3,229 +3,203 @@
  * Optimized for fastest possible initialization and display
  */
 const BaseDisplayAdapter = require('./BaseDisplayAdapter');
-const { spawn, execSync, exec } = require('child_process');
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
+const config = require('../../config/ConfigManager');
 
-// For Raspberry Pi, we'll use a simplified driver detection
 class IT8951DisplayAdapter extends BaseDisplayAdapter {
   constructor() {
     super();
     this.initialized = false;
-    this.imageProcess = null;
-    this.displayWidth = 1600;  // Default width
-    this.displayHeight = 1200; // Default height
-    this.vcom = -2270; // Default VCOM value
-    this.initPromise = null; // Track initialization promise to avoid duplicates
+    this.initializationTimeout = null;
+    this.initializationRetries = 0;
+    this.maxRetries = 3;
 
-    // For Raspberry Pi/DietPi - just use the direct command
-    this.driverPath = 'it8951';
-    this.driverAvailable = true; // Assume driver is available on Pi
+    try {
+      // Initialize the display with configuration
+      const IT8951 = require('node-it8951');
+      this.display = new IT8951({
+        MAX_BUFFER_SIZE: config.display.maxBufferSize,
+        ALIGN4BYTES: config.display.align4Bytes,
+        VCOM: config.display.vcom
+      });
 
-    console.log('IT8951 display adapter created');
+      console.log('IT8951 display adapter created');
+    } catch (error) {
+      console.error('Error creating IT8951 display adapter:', error.message);
+      // Create a dummy display object to prevent null references
+      this.display = {
+        init: () => { throw new Error('Display initialization failed'); },
+        clear: () => {},
+        draw: () => {},
+        close: () => {}
+      };
+    }
   }
 
   /**
-   * Initialize the IT8951 display with fallback for missing driver
+   * Initialize the e-ink display with timeout and retry logic
    */
-  async init() {
-    if (this.initialized) return;
-    if (this.initPromise) return this.initPromise;
+  init() {
+    if (this.initialized) {
+      return Promise.resolve();
+    }
 
-    this.initPromise = new Promise(async (resolve, reject) => {
+    return new Promise((resolve, reject) => {
+      // Clear any existing timeout
+      if (this.initializationTimeout) {
+        clearTimeout(this.initializationTimeout);
+      }
+
+      console.log(`Initializing e-ink display (attempt ${this.initializationRetries + 1} of ${this.maxRetries})...`);
+
       try {
-        // Driver is available, proceed with normal initialization
-        const maxAttempts = 3;
-        let attempt = 1;
+        // Set a timeout to detect hanging initialization
+        this.initializationTimeout = setTimeout(() => {
+          if (!this.initialized) {
+            console.error('Display initialization timed out after 10 seconds');
 
-        // Need full initialization
-        while (attempt <= maxAttempts) {
-          try {
-            console.log(`Initializing e-ink display (attempt ${attempt} of ${maxAttempts})...`);
-            await this.initializeDisplay();
-
-            // Mark as initialized
-            this.initialized = true;
-
-            // Mark driver as initialized
-            this.markDriverInitialized();
-
-            console.log('Display initialized successfully.');
-            break;
-          } catch (error) {
-            console.error(`Display initialization failed (attempt ${attempt}): ${error.message}`);
-
-            if (attempt === maxAttempts) {
-              console.error('Failed to initialize display after maximum attempts.');
-              reject(new Error('Could not initialize display after multiple attempts'));
-              return;
+            // Try to retry initialization if under max attempts
+            if (this.initializationRetries < this.maxRetries) {
+              this.initializationRetries++;
+              console.log('Retrying display initialization...');
+              this.init().then(resolve).catch(reject);
+            } else {
+              console.error(`Failed to initialize display after ${this.maxRetries} attempts`);
+              reject(new Error('Display initialization timed out after maximum retries'));
             }
-
-            attempt++;
-            // Wait before retry
-            await new Promise(r => setTimeout(r, 500));
           }
-        }
+        }, 10000); // 10 second timeout
 
+        // Initialize the display
+        this.display.init();
+
+        // If we get here without error, clear timeout and mark as initialized
+        clearTimeout(this.initializationTimeout);
+        this.initializationTimeout = null;
+        this.initialized = true;
+        console.log('Display initialized successfully.');
+
+        // Reset retry counter
+        this.initializationRetries = 0;
         resolve();
       } catch (error) {
-        console.error('Display initialization error:', error);
-        reject(error);
+        // Clear the timeout if there's an error
+        if (this.initializationTimeout) {
+          clearTimeout(this.initializationTimeout);
+          this.initializationTimeout = null;
+        }
+
+        console.error(`Error initializing e-ink display: ${error.message}`);
+
+        // Try to retry initialization if under max attempts
+        if (this.initializationRetries < this.maxRetries) {
+          this.initializationRetries++;
+
+          // Wait a bit before retrying
+          setTimeout(() => {
+            console.log('Retrying display initialization after error...');
+            this.init().then(resolve).catch(reject);
+          }, 2000);
+        } else {
+          console.error(`Failed to initialize display after ${this.maxRetries} attempts`);
+          reject(error);
+        }
       }
     });
-
-    return this.initPromise;
   }
 
   /**
-   * Fast path to just get display dimensions if already initialized
-   */
-  getDisplayDimensions() {
-    const dims = execSync('cat /tmp/it8951_dimensions 2>/dev/null || echo "1600 1200"').toString().trim().split(' ');
-    this.displayWidth = parseInt(dims[0]);
-    this.displayHeight = parseInt(dims[1]);
-    console.log(`width =  ${this.displayWidth}`);
-    console.log(`height =  ${this.displayHeight}`);
-    return { width: this.displayWidth, height: this.displayHeight };
-  }
-
-  /**
-   * Mark driver as initialized for future fast paths
-   */
-  markDriverInitialized() {
-    try {
-      // Store dimensions for faster retrieval
-      fs.writeFileSync('/tmp/it8951_dimensions', `${this.displayWidth} ${this.displayHeight}`);
-
-      // Create initialization flag file
-      fs.writeFileSync('/tmp/it8951_initialized', Date.now().toString());
-    } catch (error) {
-      // Ignore errors - this is just an optimization
-    }
-  }
-
-  /**
-   * Initialize the display hardware with optimized parallel processing
-   * @private
-   */
-  async initializeDisplay() {
-    return new Promise((resolve, reject) => {
-      // Spawn process with optimized options - directly pipe output to save parsing time
-      const process = spawn(this.driverPath, ['info'], {
-        stdio: ['ignore', 'pipe', 'pipe']
-      });
-
-      let stdoutData = '';
-      let stderrData = '';
-
-      // Process output as it comes in to extract info faster
-      process.stdout.on('data', (data) => {
-        const str = data.toString();
-        stdoutData += str;
-
-        // Parse dimensions and other info as they come in
-        if (str.includes('width =')) {
-          const match = str.match(/width\s+=\s+(\d+)/);
-          if (match) this.displayWidth = parseInt(match[1]);
-        } else if (str.includes('height =')) {
-          const match = str.match(/height\s+=\s+(\d+)/);
-          if (match) this.displayHeight = parseInt(match[1]);
-        } else if (str.includes('VCOM =')) {
-          const match = str.match(/VCOM\s+=\s+-([\d.]+)v/);
-          if (match) this.vcom = -Math.round(parseFloat(match[1]) * 1000);
-        }
-      });
-
-      process.stderr.on('data', (data) => {
-        stderrData += data.toString();
-      });
-
-      process.on('close', (code) => {
-        if (code === 0) {
-          resolve();
-        } else {
-          reject(new Error(`Display initialization failed with code ${code}: ${stderrData}`));
-        }
-      });
-    });
-  }
-
-  /**
-   * Display an image on the e-ink screen with parallel processing optimizations
-   * @param {Buffer} imageData - The image data to display
+   * Display an image on the e-ink display
+   * @param {Buffer} imageData - Raw image data to display
    */
   async displayImage(imageData) {
-    if (!this.initialized) {
-      console.log('Display not initialized, initializing now');
-      await this.init();
-    }
-
-    return new Promise(async (resolve, reject) => {
-      try {
-        // Prepare for image processing
-        console.log(`Processing image for e-ink display, size: ${imageData.length} bytes`);
-
-        // Store image in RAM for faster processing - use /dev/shm if available
-        const ramPath = fs.existsSync('/dev/shm') ? '/dev/shm' : os.tmpdir();
-        const bufferPath = path.join(ramPath, `image_${Date.now()}.jpg`);
-
-        // Write file asynchronously to not block
-        await fs.promises.writeFile(bufferPath, imageData);
-
-        console.log(`Drawing image (${this.displayWidth}x${this.displayHeight}) on e-ink display`);
-
-        // Execute with optimized parameters
-        const process = spawn(this.driverPath, ['display', bufferPath, '-v', this.vcom], {
-          stdio: ['pipe', 'pipe', 'pipe']
-        });
-
-        let stderr = '';
-        process.stderr.on('data', (data) => {
-          stderr += data.toString();
-        });
-
-        process.on('close', async (code) => {
-          // Clean up buffer file
-          try {
-            await fs.promises.unlink(bufferPath);
-          } catch (e) {
-            // Ignore cleanup errors
-          }
-
-          if (code === 0) {
-            resolve();
-          } else {
-            reject(new Error(`Display image failed with code ${code}: ${stderr}`));
-          }
-        });
-      } catch (error) {
-        reject(error);
+    try {
+      if (!this.initialized) {
+        await this.init();
       }
-    });
+
+      console.log(`Processing image for e-ink display, size: ${imageData.length} bytes`);
+
+      // Process image to adjust brightness using the base class method
+      const brightnessAdjustedImage = await this.processImage(imageData);
+
+      // Configure the display
+      this.display.config.BPP = config.display.bpp;
+
+      const width = this.display.width;
+      const height = this.display.height;
+
+      // Convert image to raw grayscale buffer with correct size for the display
+      const sharp = require('sharp');
+      const processedImage = await sharp(brightnessAdjustedImage)
+        .resize(width, height, { fit: 'contain', background: { r: 255, g: 255, b: 255 } })
+        .grayscale()
+        .raw()
+        .toBuffer();
+
+      // Convert 8-bit grayscale to 4-bit packed grayscale
+      const displayBuffer = this.convert8bitTo4BPP(processedImage);
+
+      // Draw the image on the display
+      console.log(`Drawing image (${width}x${height}) on e-ink display`);
+      this.display.draw(displayBuffer, 0, 0, width, height);
+
+      console.log('Image displayed successfully');
+      return true;
+    } catch (error) {
+      console.error(`Error displaying image on e-ink:`, error);
+      throw error;
+    }
   }
 
   /**
-   * Close the display adapter resources
+   * Packs two 4-bit pixels into each byte for the e-ink display
+   * @param {Buffer} input - 8-bit grayscale buffer
+   * @returns {Buffer} - 4-bit packed grayscale buffer
    */
-  close() {
-    this.initialized = false;
-    // Nothing specific to close for the IT8951 adapter
+  convert8bitTo4BPP(input) {
+    const output = Buffer.alloc(Math.ceil(input.length / 2));
+    for (let i = 0; i < input.length; i += 2) {
+      const high = input[i] >> 4;
+      const low = (i + 1 < input.length) ? (input[i + 1] >> 4) : 0x0;
+      output[i >> 1] = (high << 4) | low;
+    }
+    return output;
   }
 
   /**
-   * Clear the e-ink display
+   * Clear the display
    */
   clear() {
-    if (!this.initialized) {
+    if (this.initialized) {
+      try {
+        this.display.clear();
+        console.log('Display cleared');
+      } catch (error) {
+        console.error('Error clearing display:', error.message);
+      }
+    } else {
       console.log('Display not initialized, skipping clear');
-      return;
+    }
+  }
+
+  /**
+   * Close the display connection
+   */
+  close() {
+    // Clear any pending initialization timeout
+    if (this.initializationTimeout) {
+      clearTimeout(this.initializationTimeout);
+      this.initializationTimeout = null;
     }
 
-    try {
-      execSync(`${this.driverPath} clear`, { stdio: 'inherit' });
-    } catch (error) {
-      console.error('Error clearing display:', error);
+    if (this.initialized) {
+      try {
+        this.display.close();
+      } catch (error) {
+        console.error('Error closing display:', error.message);
+      }
+      this.initialized = false;
+      console.log('E-ink display closed');
     }
   }
 }
