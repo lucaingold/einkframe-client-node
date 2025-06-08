@@ -8,28 +8,49 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-// Check if IT8951 tool is available in the system
-let it8951Available = false;
-let it8951Path = 'it8951'; // Default command path
+// Fast check if IT8951 binary exists - moved inside the class for better error handling
+class IT8951DisplayAdapter extends BaseDisplayAdapter {
+  constructor() {
+    super();
+    this.initialized = false;
+    this.imageProcess = null;
+    this.displayWidth = 1600;  // Default width
+    this.displayHeight = 1200; // Default height
+    this.vcom = -2270; // Default VCOM value
+    this.initPromise = null; // Track initialization promise to avoid duplicates
+    this.driverAvailable = false; // Will be properly checked during init
 
-try {
-  // Check if the command exists using 'which it8951' or equivalent
-  if (os.platform() === 'win32') {
-    // Windows
+    // Don't check for driver in constructor anymore - defer to init
+    console.log('IT8951 display adapter created');
+  }
+
+  /**
+   * Check if IT8951 driver is available on the system
+   * This is a more robust check that correctly handles different environments
+   */
+  checkDriverAvailability() {
     try {
-      execSync('where it8951');
-      it8951Available = true;
-    } catch (e) {
-      it8951Available = false;
-    }
-  } else {
-    // Unix-like
-    try {
-      const commandPath = execSync('which it8951 2>/dev/null || echo ""').toString().trim();
-      if (commandPath) {
-        it8951Path = commandPath;
-        it8951Available = true;
+      // Use different command depending on OS
+      if (os.platform() === 'win32') {
+        try {
+          execSync('where it8951', { stdio: 'pipe' });
+          this.driverPath = 'it8951';
+          return true;
+        } catch (e) {
+          return false;
+        }
       } else {
+        // Unix-like - try 'which' command first
+        try {
+          const commandPath = execSync('which it8951 2>/dev/null || echo ""', { stdio: 'pipe' }).toString().trim();
+          if (commandPath) {
+            this.driverPath = commandPath;
+            return true;
+          }
+        } catch (e) {
+          // Continue to check common paths
+        }
+
         // Check common installation locations
         const possiblePaths = [
           '/usr/local/bin/it8951',
@@ -40,64 +61,16 @@ try {
 
         for (const possiblePath of possiblePaths) {
           if (fs.existsSync(possiblePath)) {
-            it8951Path = possiblePath;
-            it8951Available = true;
-            console.log(`Found IT8951 at: ${it8951Path}`);
-            break;
+            this.driverPath = possiblePath;
+            return true;
           }
         }
       }
     } catch (e) {
-      it8951Available = false;
+      console.error('Error checking for IT8951:', e.message);
     }
-  }
-} catch (error) {
-  console.warn('Error checking for IT8951 command:', error.message);
-  it8951Available = false;
-}
 
-console.log(`IT8951 driver availability: ${it8951Available ? 'YES' : 'NO'}`);
-
-// Flag to track if we've already initialized in this session
-let isDriverWarmedUp = false;
-try {
-  // Skip initialization check if driver isn't available
-  if (it8951Available) {
-    const tmpFilePath = '/tmp/it8951_initialized';
-    if (fs.existsSync(tmpFilePath)) {
-      const stat = fs.statSync(tmpFilePath);
-      // Try to get boot time, with fallback if it fails
-      try {
-        const bootTime = parseInt(execSync('cat /proc/stat | grep btime | awk \'{print $2}\'').toString());
-        const fileTime = Math.floor(stat.birthtimeMs / 1000);
-
-        if (fileTime >= bootTime) {
-          isDriverWarmedUp = true;
-        }
-      } catch (e) {
-        // If we can't determine boot time, use a simple age check (1 hour)
-        const fileAge = Date.now() - stat.mtimeMs;
-        if (fileAge < 3600000) {
-          isDriverWarmedUp = true;
-        }
-      }
-    }
-  }
-} catch (error) {
-  // Ignore errors - we'll initialize normally
-}
-
-class IT8951DisplayAdapter extends BaseDisplayAdapter {
-  constructor() {
-    super();
-    this.initialized = false;
-    this.imageProcess = null;
-    this.displayWidth = 1600;  // Default width
-    this.displayHeight = 1200; // Default height
-    this.vcom = -2270; // Default VCOM value
-    this.initPromise = null; // Track initialization promise to avoid duplicates
-    this.driverAvailable = it8951Available;
-    console.log('IT8951 display adapter created');
+    return false;
   }
 
   /**
@@ -109,6 +82,10 @@ class IT8951DisplayAdapter extends BaseDisplayAdapter {
 
     this.initPromise = new Promise(async (resolve, reject) => {
       try {
+        // Check if driver is available - do this check during init, not constructor
+        this.driverAvailable = this.checkDriverAvailability();
+        console.log(`IT8951 driver availability: ${this.driverAvailable ? 'YES' : 'NO'}`);
+
         // Check if driver is available
         if (!this.driverAvailable) {
           console.warn('IT8951 driver not found - using mock display adapter');
@@ -209,7 +186,7 @@ class IT8951DisplayAdapter extends BaseDisplayAdapter {
   async initializeDisplay() {
     return new Promise((resolve, reject) => {
       // Spawn process with optimized options - directly pipe output to save parsing time
-      const process = spawn(it8951Path, ['info'], {
+      const process = spawn(this.driverPath, ['info'], {
         stdio: ['ignore', 'pipe', 'pipe']
       });
 
@@ -260,6 +237,13 @@ class IT8951DisplayAdapter extends BaseDisplayAdapter {
 
     return new Promise(async (resolve, reject) => {
       try {
+        // If driver is not available, use mock mode
+        if (!this.driverAvailable) {
+          console.log('Using mock display mode - image would normally be displayed here');
+          // Just resolve the promise without trying to use the IT8951 command
+          return resolve();
+        }
+
         // Prepare for image processing
         console.log(`Processing image for e-ink display, size: ${imageData.length} bytes`);
 
@@ -273,7 +257,7 @@ class IT8951DisplayAdapter extends BaseDisplayAdapter {
         console.log(`Drawing image (${this.displayWidth}x${this.displayHeight}) on e-ink display`);
 
         // Execute with optimized parameters
-        const process = spawn(it8951Path, ['display', bufferPath, '-v', this.vcom], {
+        const process = spawn(this.driverPath, ['display', bufferPath, '-v', this.vcom], {
           stdio: ['ignore', 'pipe', 'pipe']
         });
 
@@ -319,8 +303,14 @@ class IT8951DisplayAdapter extends BaseDisplayAdapter {
       return;
     }
 
+    // Skip if using mock mode
+    if (!this.driverAvailable) {
+      console.log('Using mock display mode - clear operation would normally happen here');
+      return;
+    }
+
     try {
-      execSync(`${it8951Path} clear`, { stdio: 'inherit' });
+      execSync(`${this.driverPath} clear`, { stdio: 'inherit' });
     } catch (error) {
       console.error('Error clearing display:', error);
     }
