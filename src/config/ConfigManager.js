@@ -36,17 +36,48 @@ class ConfigManager {
       align4Bytes: true,
       vcom: 2270,
       bpp: 4, // 4 bits per pixel, 16 grayscale levels
-      // Brightness factor (1.0 = normal, >1.0 = brighter, <1.0 = darker)
-      brightness: process.env.DISPLAY_BRIGHTNESS ? parseFloat(process.env.DISPLAY_BRIGHTNESS) : 1.0
+      // Default brightness value - can be overridden by MQTT config
+      brightness: 1.0
     };
 
-    // GPIO Configuration
+    // Auto shutdown Configuration
+    this.autoShutdown = {
+      // Always default to false for safety - only enabled explicitly via config message
+      enabled: false
+    };
+
+    // GPIO Configuration - keep for future functionality but disable auto-shutdown
     this.gpio = {
       // Enable or disable shutdown via GPIO switch feature
-      enableShutdownSwitch: process.env.ENABLE_GPIO_SHUTDOWN === 'true',
+      enableShutdownSwitch: false,
       // GPIO pin number for shutdown switch (BCM numbering)
       shutdownPin: 27
     };
+  }
+
+  /**
+   * Update configuration based on MQTT message
+   * @param {Object} configData - Config data from MQTT message
+   */
+  updateConfig(configData) {
+    console.log('Updating configuration with received values:', JSON.stringify(configData));
+
+    // Update display brightness if provided
+    if (configData.displayBrightness !== undefined) {
+      this.display.brightness = parseFloat(configData.displayBrightness);
+      console.log(`Display brightness updated to: ${this.display.brightness}`);
+    }
+
+    // Update auto-shutdown setting if provided
+    if (configData.enableAutoShutdown !== undefined) {
+      // Explicitly convert to boolean to ensure correct type
+      this.autoShutdown.enabled = configData.enableAutoShutdown === true;
+      console.log(`Auto shutdown ${this.autoShutdown.enabled ? 'enabled' : 'disabled'}`);
+    } else {
+      // If enableAutoShutdown is not specified in the config message, default to false
+      this.autoShutdown.enabled = false;
+      console.log('Auto shutdown defaulted to disabled (not specified in config)');
+    }
   }
 }
 

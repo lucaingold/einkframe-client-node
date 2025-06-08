@@ -58,6 +58,7 @@ SPECIFIC_DEVICE_ID=your-device-id
 The installation script configures your application as a systemd service that runs on startup with sudo privileges, and prompts for MQTT configuration details:
 
 ```bash
+sudo apt-get install build-essential
 chmod +x install-service.sh
 sudo ./install-service.sh
 ```

@@ -63,6 +63,16 @@ class MQTTClient {
         console.log(`Subscribed to topic: ${config.mqtt.topics.imageDisplay}`);
       }
     });
+
+    // Subscribe to config topic for this device
+    const configTopic = `device/${config.device.id}/config`;
+    this.client.subscribe(configTopic, { qos: 1 }, (err) => {
+      if (err) {
+        console.error('Error subscribing to config topic:', err);
+      } else {
+        console.log(`Subscribed to topic: ${configTopic}`);
+      }
+    });
   }
 
   /**
@@ -86,6 +96,9 @@ class MQTTClient {
       if (topic.includes('image/display')) {
         // Pass the message to the handler
         await this.messageHandler.handleImageMessage(message);
+      } else if (topic.includes('/config')) {
+        // Handle configuration message
+        this.messageHandler.handleConfigMessage(message);
       }
     } catch (error) {
       console.error('Error processing message:', error);
