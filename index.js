@@ -232,30 +232,44 @@ class Application {
       const configData = JSON.parse(messageData.toString());
       console.log('Parsed config data:', JSON.stringify(configData, null, 2));
 
-      // Check if display configuration exists and properly extract brightness
+      // Create display config object if it doesn't exist
+      if (!configData.display) configData.display = {};
+
+      // Check all possible brightness field formats
+      let brightness = null;
+
+      // Check for nested display.brightness
       if (configData.display && configData.display.brightness !== undefined) {
-        const brightness = parseFloat(configData.display.brightness);
-        if (!isNaN(brightness)) {
-          console.log(`Extracted brightness value from MQTT: ${brightness}`);
+        brightness = parseFloat(configData.display.brightness);
+        console.log(`Found brightness in display.brightness: ${brightness}`);
+      }
+      // Check for displayBrightness (format seen in logs)
+      else if (configData.displayBrightness !== undefined) {
+        brightness = parseFloat(configData.displayBrightness);
+        console.log(`Found brightness in displayBrightness: ${brightness}`);
+        // Map this to the correct format for our config system
+        configData.display.brightness = brightness;
+      }
+      // Check for top-level brightness
+      else if (configData.brightness !== undefined) {
+        brightness = parseFloat(configData.brightness);
+        console.log(`Found brightness in top-level brightness: ${brightness}`);
+        // Map this to the correct format for our config system
+        configData.display.brightness = brightness;
+      }
 
-          // Ensure the display config object exists before updating
-          if (!configData.display) configData.display = {};
+      // Validate the brightness value if found
+      if (brightness !== null && !isNaN(brightness)) {
+        console.log(`Using brightness value: ${brightness}`);
+        configData.display.brightness = brightness;
+      }
 
-          // Set the brightness explicitly to ensure it's a number
-          configData.display.brightness = brightness;
-        }
-      } else if (configData.brightness !== undefined) {
-        // Also check for top-level brightness field for compatibility
-        const brightness = parseFloat(configData.brightness);
-        if (!isNaN(brightness)) {
-          console.log(`Extracted top-level brightness value from MQTT: ${brightness}`);
-
-          // Ensure the display config object exists
-          if (!configData.display) configData.display = {};
-
-          // Set the brightness in the proper structure
-          configData.display.brightness = brightness;
-        }
+      // Handle autoShutdown configuration
+      if (configData.enableAutoShutdown !== undefined) {
+        configData.autoShutdown = {
+          enabled: Boolean(configData.enableAutoShutdown)
+        };
+        console.log(`Setting autoShutdown to: ${configData.autoShutdown.enabled}`);
       }
 
       // Update configuration
