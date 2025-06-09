@@ -168,11 +168,8 @@ class Application {
       const MQTTClient = require('./src/mqtt/MQTTClient');
 
       // Ultra-fast connection with minimal setup
-      console.log(`Ultra-fast connecting to MQTT broker at ${config.mqtt.host}`);
-      this.mqttClient = new MQTTClient();
-
-      // Set up message handler with image buffering during startup
-      this.mqttClient.onMessage((topic, message) => this.handleMqttMessage(topic, message));
+      console.log(`Ultra-fast connecting to MQTT broker at ${config.mqtt.broker.url}`);
+      this.mqttClient = new MQTTClient(this);
 
       // Connect to broker
       await this.mqttClient.connect();
