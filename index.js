@@ -1,4 +1,4 @@
-us/**
+/**
  * MQTT Client for einkframe
  * This client connects to an MQTT broker and displays images on an IT8951 e-ink display.
  * Ultra-optimized for fastest startup and image display with hyper-lazy-loading.
