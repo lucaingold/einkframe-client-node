@@ -24,19 +24,34 @@ class EnvUpdater {
       // Read the current .env content
       let envContent = fs.readFileSync(envPath, 'utf8');
 
-      // Create regex to match the key
-      const keyRegex = new RegExp(`^${key}=.*$`, 'm');
+      // Split content into lines for safer processing
+      let lines = envContent.split('\n');
+      let found = false;
 
-      if (keyRegex.test(envContent)) {
-        // Key exists, update it
-        envContent = envContent.replace(keyRegex, `${key}=${value}`);
-      } else {
-        // Key doesn't exist, add it
-        envContent += `\n${key}=${value}`;
+      // Process each line to find and update the key
+      for (let i = 0; i < lines.length; i++) {
+        // Check if this line contains the key (ignoring comments)
+        if (lines[i].match(new RegExp(`^\\s*${key}\\s*=`))) {
+          // Preserve any comments after the value
+          const commentMatch = lines[i].match(/#.*$/);
+          const comment = commentMatch ? commentMatch[0] : '';
+
+          // Update the line with new value, preserving any trailing comment
+          lines[i] = `${key}=${value}${comment ? ' ' + comment : ''}`;
+          found = true;
+          break;
+        }
       }
 
-      // Write the updated content back
-      fs.writeFileSync(envPath, envContent, 'utf8');
+      // If key wasn't found, add it at the end
+      if (!found) {
+        lines.push(`${key}=${value}`);
+      }
+
+      // Reconstruct the file content and write it back
+      const updatedContent = lines.join('\n');
+      fs.writeFileSync(envPath, updatedContent, 'utf8');
+
       console.log(`Updated ${key}=${value} in .env file`);
       return true;
     } catch (error) {
