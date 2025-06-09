@@ -91,12 +91,27 @@ class ConfigManager {
    */
   get display() {
     if (!this._initialized.display) {
+      this._loadEnvIfNeeded();
+
+      // Parse brightness from environment if available
+      let brightness = 1.0;
+      if (process.env.DISPLAY_BRIGHTNESS) {
+        try {
+          const parsedBrightness = parseFloat(process.env.DISPLAY_BRIGHTNESS);
+          if (!isNaN(parsedBrightness) && parsedBrightness > 0) {
+            brightness = parsedBrightness;
+          }
+        } catch (e) {
+          // Continue with default on error
+        }
+      }
+
       this._display = {
         maxBufferSize: 32797,
         align4Bytes: true,
         vcom: 2270,
         bpp: 4, // 4 bits per pixel, 16 grayscale levels
-        brightness: 1.0
+        brightness: brightness
       };
 
       this._initialized.display = true;

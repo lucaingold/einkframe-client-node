@@ -258,10 +258,19 @@ class Application {
       logPerformance('Config message received');
       try {
         const configUpdate = JSON.parse(message.toString());
-        console.log('Received configuration update');
+         console.log('Received configuration update:', JSON.stringify(configUpdate));
+
         // Apply config updates
+        const config = this.getConfig();
+        config.updateConfig(configUpdate);
+
+        // If brightness was updated, also update the display controller
+        if (configUpdate.display && configUpdate.display.brightness !== undefined) {
+          console.log(`Updating display brightness to: ${configUpdate.display.brightness}`);
+          this.displayController.setBrightness(configUpdate.display.brightness);
+        }
       } catch (error) {
-        console.error('Error parsing config message:', error);
+        console.error('Error processing config message:', error);
       }
     }
   }
