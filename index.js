@@ -230,11 +230,41 @@ class Application {
       logPerformance('Config message received');
 
       const configData = JSON.parse(messageData.toString());
+      console.log('Parsed config data:', JSON.stringify(configData, null, 2));
+
+      // Check if display configuration exists and properly extract brightness
+      if (configData.display && configData.display.brightness !== undefined) {
+        const brightness = parseFloat(configData.display.brightness);
+        if (!isNaN(brightness)) {
+          console.log(`Extracted brightness value from MQTT: ${brightness}`);
+
+          // Ensure the display config object exists before updating
+          if (!configData.display) configData.display = {};
+
+          // Set the brightness explicitly to ensure it's a number
+          configData.display.brightness = brightness;
+        }
+      } else if (configData.brightness !== undefined) {
+        // Also check for top-level brightness field for compatibility
+        const brightness = parseFloat(configData.brightness);
+        if (!isNaN(brightness)) {
+          console.log(`Extracted top-level brightness value from MQTT: ${brightness}`);
+
+          // Ensure the display config object exists
+          if (!configData.display) configData.display = {};
+
+          // Set the brightness in the proper structure
+          configData.display.brightness = brightness;
+        }
+      }
+
+      // Update configuration
       config.updateConfig(configData);
       this.configProcessed = true;
 
       // Apply brightness if initialized
-      if (this.displayInitialized) {
+      if (this.displayInitialized && config.display.brightness !== undefined) {
+        console.log(`Applying brightness value to display: ${config.display.brightness}`);
         this.displayController.setBrightness(config.display.brightness);
       }
 
