@@ -3,6 +3,7 @@
  */
 const sharp = require('sharp');
 const config = require('../../config/ConfigManager');
+const EnvUpdater = require('../../util/EnvUpdater');
 
 class BaseDisplayAdapter {
   /**
@@ -37,6 +38,25 @@ class BaseDisplayAdapter {
       // Return original image if processing fails
       return imageData;
     }
+  }
+
+  /**
+   * Set display brightness
+   * @param {number} brightness - Brightness value between 0.0 and 2.0
+   */
+  setBrightness(brightness) {
+    if (typeof brightness === 'number' && brightness >= 0) {
+      console.log(`Setting display brightness to: ${brightness}`);
+
+      // Update config in memory
+      config.display.brightness = brightness;
+
+      // Persist to .env file
+      EnvUpdater.updateEnvFile('DISPLAY_BRIGHTNESS', brightness);
+
+      return true;
+    }
+    return false;
   }
 
   /**
