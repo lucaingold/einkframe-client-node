@@ -1,91 +1,57 @@
 /**
- * DisplayController - Factory for display adapters with ultra-fast initialization
+ * DisplayController - Factory for display adapters based on the current platform
  */
+const fs = require('fs');
+const path = require('path');
 
-// Fast platform detection without loading any modules initially
-let isRaspberryPi = true; // Default assumption - we'll check just in time
+// Fast adapter selection - done at module load time
+// Read IS_RASPBERRY_PI directly from .env without dependencies
+const envPath = path.join(process.cwd(), '.env');
+let isRaspberryPi = true; // Default to Raspberry Pi
+try {
+  if (fs.existsSync(envPath)) {
+    const envContent = fs.readFileSync(envPath, 'utf8');
+    const match = envContent.match(/IS_RASPBERRY_PI\s*=\s*(true|false)/i);
+    if (match) {
+      isRaspberryPi = match[1].toLowerCase() === 'true';
+    }
+  }
+} catch (e) {
+  // Silently default to Raspberry Pi on error
+}
 
-// Deferred adapter loading - no requires at module level
+// Lazy-load the appropriate adapter to improve startup time
+const getAdapter = () => {
+  if (isRaspberryPi) {
+    const IT8951DisplayAdapter = require('./adapters/IT8951DisplayAdapter');
+    return new IT8951DisplayAdapter();
+  } else {
+    const MacDisplayAdapter = require('./adapters/MacDisplayAdapter');
+    return new MacDisplayAdapter();
+  }
+};
+
 class DisplayController {
   constructor() {
     this.isInitialized = false;
-    this.adapter = null;
-    this.initPromise = null;
-
-    // Pre-determine if we're on a Pi without loading modules
-    // This is even faster than reading .env file
-    try {
-      // Fastest check: look for Raspberry Pi-specific files
-      const fs = require('fs');
-      isRaspberryPi = fs.existsSync('/proc/device-tree/model') &&
-                      fs.readFileSync('/proc/device-tree/model', 'utf8').includes('Raspberry Pi');
-    } catch (e) {
-      // Fallback to checking environment variable
-      try {
-        const path = require('path');
-        const envPath = path.join(process.cwd(), '.env');
-        if (fs.existsSync(envPath)) {
-          const envContent = fs.readFileSync(envPath, 'utf8');
-          const match = envContent.match(/IS_RASPBERRY_PI\s*=\s*(true|false)/i);
-          if (match) {
-            isRaspberryPi = match[1].toLowerCase() === 'true';
-          }
-        }
-      } catch (e) {
-        // Silently default to Raspberry Pi on error
-      }
-    }
-
-    console.log(`Display controller created for ${isRaspberryPi ? 'Raspberry Pi' : 'Mac'} platform`);
+    this.adapter = null; // Will be initialized on demand
   }
 
   /**
-   * Initialize the display adapter with ultra-optimized initialization
-   * Returns a promise that resolves when display is ready
+   * Initialize the display adapter with optimized loading
    */
   async init() {
-    // Return existing initialization if already in progress
-    if (this.initPromise) {
-      return this.initPromise;
-    }
-
-    // Return immediately if already initialized
-    if (this.isInitialized) {
-      return Promise.resolve();
-    }
-
     console.log(`Initializing display adapter for ${isRaspberryPi ? 'Raspberry Pi' : 'Mac'}`);
 
-    // Create initialization promise
-    this.initPromise = new Promise(async (resolve, reject) => {
-      try {
-        // Create adapter just in time - load required modules only when needed
-        if (!this.adapter) {
-          if (isRaspberryPi) {
-            const IT8951DisplayAdapter = require('./adapters/IT8951DisplayAdapter');
-            this.adapter = new IT8951DisplayAdapter();
-          } else {
-            const MacDisplayAdapter = require('./adapters/MacDisplayAdapter');
-            this.adapter = new MacDisplayAdapter();
-          }
-        }
+    // Load adapter just in time
+    if (!this.adapter) {
+      this.adapter = getAdapter();
+    }
 
-        // Initialize the adapter with high priority
-        await this.adapter.init();
-
-        this.isInitialized = true;
-        console.log('Display initialized and ready for immediate rendering');
-        resolve();
-      } catch (error) {
-        console.error('Display initialization failed:', error);
-        reject(error);
-      } finally {
-        // Clear promise reference to allow retries if needed
-        this.initPromise = null;
-      }
-    });
-
-    return this.initPromise;
+    // Initialize the adapter
+    await this.adapter.init();
+    this.isInitialized = true;
+    console.log('Display initialized and ready for immediate rendering');
   }
 
   /**
@@ -93,21 +59,15 @@ class DisplayController {
    * @param {Buffer} imageData - Raw image data to display
    */
   async displayImage(imageData) {
-    // Initialize if needed
-    if (!this.isInitialized) {
-      await this.init();
-    }
-
-    console.log(`Display controller processing image of ${imageData.length} bytes`);
-    return this.adapter.displayImage(imageData);
+    await this.adapter.displayImage(imageData);
   }
 
   /**
-   * Set display brightness with fast response
+   * Set display brightness
    * @param {number} brightness - Brightness value
    */
   setBrightness(brightness) {
-    if (this.adapter && this.adapter.setBrightness) {
+    if (this.adapter.setBrightness) {
       this.adapter.setBrightness(brightness);
     }
   }
@@ -116,19 +76,14 @@ class DisplayController {
    * Clear the display using the selected adapter
    */
   clear() {
-    if (this.adapter) {
-      this.adapter.clear();
-    }
+    this.adapter.clear();
   }
 
   /**
-   * Close the display adapter and release resources
+   * Close the display adapter
    */
   close() {
-    if (this.adapter) {
-      this.adapter.close();
-      this.isInitialized = false;
-    }
+    this.adapter.close();
   }
 }
 

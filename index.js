@@ -1,7 +1,7 @@
 /**
  * MQTT Client for einkframe
  * This client connects to an MQTT broker and displays images on an IT8951 e-ink display.
- * Ultra-optimized for fastest startup and image display with hyper-lazy-loading.
+ * Optimized for fastest startup and image display with parallel initialization.
  */
 
 // Performance tracking
@@ -23,66 +23,54 @@ function logPerformance(label) {
   return elapsedMs;
 }
 
-// Only require fs and path at startup - everything else lazy loaded
-const fs = require('fs');
-const path = require('path');
+// Core dependencies
+const config = require('./src/config/ConfigManager');
+const DisplayController = require('./src/display/DisplayController');
+const MQTTClient = require('./src/mqtt/MQTTClient');
 
-// Ultra-fast device ID determination without loading full config
-function getFastDeviceId() {
-  try {
-    // Try to get from environment first (fastest)
-    if (process.env.DEVICE_ID) return process.env.DEVICE_ID;
+// Defer GPIO loading for speed
+let GPIOHandler = null;
 
-    // Try to read MAC address directly from file (faster than loading os module)
-    if (fs.existsSync('/sys/class/net/wlan0/address')) {
-      return fs.readFileSync('/sys/class/net/wlan0/address', 'utf8').trim();
-    }
-
-    // Fall back to requiring os module
-    return require('os').networkInterfaces()['wlan0']?.[0]?.mac || 'unknown';
-  } catch (e) {
-    return 'unknown';
-  }
-}
-
-// Get device ID ultra-fast
-const deviceId = getFastDeviceId();
-console.log(`Starting einkframe client for device: ${deviceId}`);
-
-// Buffer for images received during startup
-let imageBuffer = null;
+// Simple buffer for images received during startup
+let bufferedImage = null;
+let bufferedImageTime = 0;
 
 class Application {
   constructor() {
-    // Initialize variables without loading any modules
     this.displayController = null;
     this.mqttClient = null;
-    this.config = null;
-    this.displayReady = false;
-    this.mqttReady = false;
+    this.gpioHandler = null;
+    this.imageProcessed = false;
+    this.configProcessed = false;
     this.shuttingDown = false;
+    this.displayInitialized = false;
 
     logPerformance('Application constructor completed');
   }
 
   /**
-   * Ultra-fast initialization with display priority
+   * Initialize application with parallel processing
    */
   async init() {
-    // Start display initialization immediately (highest priority)
-    const displayPromise = this.initDisplayWithPriority();
+    console.log(`Starting einkframe client for device: ${config.device.id}`);
 
-    // Start MQTT in parallel but slightly delayed to prioritize display
-    const mqttPromise = new Promise(resolve => {
-      // Small delay to ensure display gets CPU priority first
-      setTimeout(() => this.initMqtt().then(resolve), 10);
-    });
+    // Run display and MQTT initialization in parallel
+    console.log('Starting parallel initialization');
 
-    // Wait for both critical components with timeout
+    const displayPromise = this.initDisplayAsync();
+    const mqttPromise = this.initMqttAsync();
+
+    // Start GPIO in background
+    setTimeout(() => this.initGpio(), 1000);
+
+    // Set up clean shutdown
+    this.setupGracefulShutdown();
+
+    // Wait for critical components with timeout
     try {
       await Promise.race([
         Promise.all([displayPromise, mqttPromise]),
-        new Promise(resolve => setTimeout(resolve, 10000)) // Safety timeout
+        new Promise(resolve => setTimeout(resolve, 15000)) // Safety timeout
       ]);
     } catch (error) {
       console.error('Error during initialization:', error);
@@ -90,42 +78,31 @@ class Application {
 
     // Mark as fully initialized
     performanceMetrics.appFullyInitialized = Date.now() - performanceMetrics.startTimestamp;
-    logPerformance('App fully initialized');
+    console.log(`[PERFORMANCE] App fully initialized in ${performanceMetrics.appFullyInitialized}ms`);
 
     // Print performance report
     this.logPerformanceReport();
 
     // Process any image that arrived during initialization
     this.processBufferedImage();
-
-    // Initialize non-critical components in background
-    setTimeout(() => this.initLowPriorityComponents(), 1000);
   }
 
   /**
-   * Initialize display with highest priority
+   * Initialize display controller
    */
-  async initDisplayWithPriority() {
-    console.log('Initializing display controller with highest priority');
-
+  async initDisplayAsync() {
     try {
-      // Lazy load display controller
-      const DisplayController = require('./src/display/DisplayController');
+      console.log('Initializing display controller');
       this.displayController = new DisplayController();
-
-      // Initialize display
       await this.displayController.init();
-      this.displayReady = true;
+      this.displayInitialized = true;
 
       // Record metrics
       performanceMetrics.displayInitialized = Date.now() - performanceMetrics.startTimestamp;
       logPerformance('Display initialization completed');
 
-      console.log('Display initialized and ready for immediate rendering');
       console.log('Display ready - checking for buffered images');
-
-      // Check if we have a last-displayed image to show
-      this.checkForLastImage();
+      this.processBufferedImage();
 
       return true;
     } catch (error) {
@@ -135,50 +112,18 @@ class Application {
   }
 
   /**
-   * Check for and display the last image that was shown
+   * Initialize MQTT client
    */
-  checkForLastImage() {
-    // Only try if display is ready and no newer image is buffered
-    if (this.displayReady && !imageBuffer) {
-      try {
-        // Check if we have a latest_image.jpg stored
-        const deviceFolder = deviceId.replace(/:/g, '_');
-        const latestImagePath = path.join(__dirname, 'images', deviceFolder, 'latest_image.jpg');
-        if (fs.existsSync(latestImagePath)) {
-          console.log('Found last displayed image, showing it immediately');
-          const imageData = fs.readFileSync(latestImagePath);
-          // Display without blocking further initialization
-          this.displayController.displayImage(imageData).catch(e => console.error('Error displaying last image:', e));
-        }
-      } catch (error) {
-        console.error('Error checking for last image:', error);
-      }
-    }
-  }
-
-  /**
-   * Initialize MQTT client for messaging
-   */
-  async initMqtt() {
-    console.log('Fast subscribing to MQTT topics');
-
+  async initMqttAsync() {
     try {
-      // Lazy load config and MQTT client
-      const config = this.getConfig();
-      const MQTTClient = require('./src/mqtt/MQTTClient');
+      console.log('Initializing MQTT client');
+      this.mqttClient = new MQTTClient({
+        handleImageMessage: this.handleImageMessage.bind(this),
+        handleConfigMessage: this.handleConfigMessage.bind(this),
+        onMqttConnected: this.handleMqttConnected.bind(this)
+      });
 
-      // Ultra-fast connection with minimal setup
-      console.log(`Ultra-fast connecting to MQTT broker at ${config.mqtt.broker.url}`);
-      this.mqttClient = new MQTTClient(this);
-
-      // Connect to broker
       await this.mqttClient.connect();
-      this.mqttReady = true;
-
-      // Record connection time
-      performanceMetrics.mqttConnected = Date.now() - performanceMetrics.startTimestamp;
-      logPerformance('MQTT connected');
-
       return true;
     } catch (error) {
       console.error('MQTT initialization error:', error);
@@ -187,188 +132,206 @@ class Application {
   }
 
   /**
-   * Initialize low-priority components after critical startup
+   * Initialize GPIO with delay
    */
-  initLowPriorityComponents() {
-    // Set up graceful shutdown
-    this.setupGracefulShutdown();
-
-    // Initialize GPIO in background
+  initGpio() {
     try {
-      const GPIOHandler = require('./src/gpio/GPIOHandler');
+      if (!GPIOHandler) {
+        GPIOHandler = require('./src/gpio/GPIOHandler');
+      }
       this.gpioHandler = new GPIOHandler();
       this.gpioHandler.init();
       logPerformance('GPIO initialization completed');
     } catch (error) {
-      console.log('GPIO shutdown switch feature is disabled');
-      logPerformance('GPIO initialization completed');
+      console.error('GPIO initialization error:', error);
     }
   }
 
   /**
-   * Get configuration with lazy loading
+   * Handle MQTT connection established
    */
-  getConfig() {
-    if (!this.config) {
-      this.config = require('./src/config/ConfigManager');
-    }
-    return this.config;
+  handleMqttConnected() {
+    performanceMetrics.mqttConnected = Date.now() - performanceMetrics.startTimestamp;
+    console.log(`MQTT connection established in ${performanceMetrics.mqttConnected}ms`);
+    logPerformance('MQTT connected');
+    this.checkAutoShutdown();
   }
 
   /**
-   * Process any buffered images that arrived during initialization
+   * Handle image messages from MQTT
    */
-  processBufferedImage() {
-    if (imageBuffer && this.displayReady) {
-      console.log(`Processing buffered image received during initialization`);
-      this.displayImage(imageBuffer);
-      imageBuffer = null;
+  async handleImageMessage(imageData) {
+    // Record time
+    performanceMetrics.imageReceived = Date.now() - performanceMetrics.startTimestamp;
+    console.log(`Received image after ${performanceMetrics.imageReceived}ms`);
+    logPerformance('Image received');
+
+    if (!this.displayInitialized) {
+      // Buffer the image if display isn't ready yet
+      console.log('Display not ready - buffering image for later');
+      bufferedImage = imageData;
+      bufferedImageTime = Date.now();
+      return;
     }
+
+    // Process image immediately
+    await this.displayImage(imageData);
   }
 
   /**
-   * Handle incoming MQTT messages with buffering during startup
+   * Process buffered image if available
    */
-  handleMqttMessage(topic, message) {
-    const config = this.getConfig();
+  async processBufferedImage() {
+    if (this.displayInitialized && bufferedImage) {
+      const imageAge = Date.now() - bufferedImageTime;
+      console.log(`Processing buffered image (received ${imageAge}ms ago)`);
 
-    // Handle image display messages
-    if (topic.includes('/image/display')) {
-      console.log(`Received image message on topic: ${topic}`);
-      const elapsed = Date.now() - performanceMetrics.startTimestamp;
-      console.log(`Received image after ${elapsed}ms`);
-      performanceMetrics.imageReceived = elapsed;
-      logPerformance('Image received');
+      const image = bufferedImage;
+      bufferedImage = null;
 
-      if (this.displayReady) {
-        this.displayImage(message);
-      } else {
-        // Buffer the image for later display
-        console.log('Display not ready, buffering image for later');
-        imageBuffer = message;
-      }
-    }
-
-    // Handle configuration messages
-    else if (topic.includes('/config')) {
-      console.log(`Received config message on topic: ${topic}`);
-      logPerformance('Config message received');
-      try {
-        const configUpdate = JSON.parse(message.toString());
-         console.log('Received configuration update:', JSON.stringify(configUpdate));
-
-        // Apply config updates
-        const config = this.getConfig();
-        config.updateConfig(configUpdate);
-
-        // If brightness was updated, also update the display controller
-        if (configUpdate.display && configUpdate.display.brightness !== undefined) {
-          console.log(`Updating display brightness to: ${configUpdate.display.brightness}`);
-          this.displayController.setBrightness(configUpdate.display.brightness);
-        }
-      } catch (error) {
-        console.error('Error processing config message:', error);
-      }
+      await this.displayImage(image);
     }
   }
 
   /**
-   * Display an image on the e-ink screen
+   * Display image on e-ink screen
    */
   async displayImage(imageData) {
     try {
       console.log('Displaying image on e-ink screen');
+
+      // Track timing
+      const displayStart = process.hrtime();
       await this.displayController.displayImage(imageData);
+      const elapsed = process.hrtime(displayStart);
+      const renderTimeMs = (elapsed[0] * 1000 + elapsed[1] / 1000000).toFixed(2);
 
-      // Save image for fast startup next time
-      this.saveLatestImage(imageData);
+      // Update metrics
+      this.imageProcessed = true;
+      performanceMetrics.imageDisplayed = Date.now() - performanceMetrics.startTimestamp;
 
-      const elapsed = Date.now() - performanceMetrics.startTimestamp;
-      const imageTime = elapsed - performanceMetrics.imageReceived;
-      console.log(`Image displayed in ${imageTime.toFixed(2)}ms (total: ${elapsed}ms)`);
-      performanceMetrics.imageDisplayed = elapsed;
+      console.log(`Image displayed in ${renderTimeMs}ms (total: ${performanceMetrics.imageDisplayed}ms)`);
       logPerformance('Image displayed');
 
+      // Update report and check shutdown
       this.logPerformanceReport();
+      this.checkAutoShutdown();
     } catch (error) {
       console.error('Error displaying image:', error);
     }
   }
 
   /**
-   * Save the latest image for faster startup next time
+   * Handle config messages
    */
-  saveLatestImage(imageData) {
+  handleConfigMessage(messageData) {
     try {
-      // Create directory if it doesn't exist
-      const deviceFolder = deviceId.replace(/:/g, '_');
-      const dirPath = path.join(__dirname, 'images', deviceFolder);
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
+      console.log('Received configuration update');
+      logPerformance('Config message received');
+
+      const configData = JSON.parse(messageData.toString());
+      config.updateConfig(configData);
+      this.configProcessed = true;
+
+      // Apply brightness if initialized
+      if (this.displayInitialized) {
+        this.displayController.setBrightness(config.display.brightness);
       }
 
-      // Save image
-      const imagePath = path.join(dirPath, 'latest_image.jpg');
-      fs.writeFile(imagePath, imageData, err => {
-        if (err) console.error('Error saving latest image:', err);
-      });
+      this.checkAutoShutdown();
     } catch (error) {
-      console.error('Error saving latest image:', error);
+      console.error('Error processing config message:', error);
     }
   }
 
   /**
-   * Log performance metrics
+   * Log performance report
    */
   logPerformanceReport() {
-    console.log('--- PERFORMANCE REPORT ---');
+    console.log('\n--- PERFORMANCE REPORT ---');
     console.log(`Display initialization: ${performanceMetrics.displayInitialized}ms`);
-    console.log(`MQTT connection: ${performanceMetrics.mqttConnected}ms`);
-    console.log(`Image reception: ${performanceMetrics.imageReceived}ms`);
-    console.log(`Image displayed: ${performanceMetrics.imageDisplayed}ms`);
+    console.log(`MQTT connection: ${performanceMetrics.mqttConnected > 0 ? performanceMetrics.mqttConnected + 'ms' : 'not yet connected'}`);
+    console.log(`Image reception: ${performanceMetrics.imageReceived > 0 ? performanceMetrics.imageReceived + 'ms' : 'no image received yet'}`);
+    console.log(`Image displayed: ${performanceMetrics.imageDisplayed > 0 ? performanceMetrics.imageDisplayed + 'ms' : 'no image displayed yet'}`);
     console.log(`App fully initialized: ${performanceMetrics.appFullyInitialized}ms`);
-    console.log('-------------------------');
+    console.log('-------------------------\n');
+
+    // Schedule another report if needed
+    if (performanceMetrics.imageDisplayed === 0) {
+      setTimeout(() => this.logPerformanceReport(), 10000);
+    }
   }
 
   /**
-   * Set up graceful shutdown handlers
+   * Check if auto-shutdown criteria are met
    */
-  setupGracefulShutdown() {
-    process.on('SIGINT', () => this.shutdown());
-    process.on('SIGTERM', () => this.shutdown());
+  checkAutoShutdown() {
+    if (!this.mqttClient || !this.mqttClient.isConnected) {
+      return;
+    }
+
+    if (this.imageProcessed && this.configProcessed && config.autoShutdown.enabled) {
+      console.log('Auto-shutdown conditions met');
+      this.shutdownSystem();
+    }
   }
 
   /**
-   * Clean shutdown of the application
+   * Shutdown the system
    */
-  shutdown() {
-    if (this.shuttingDown) return;
+  shutdownSystem() {
+    if (this.shuttingDown) {
+      return;
+    }
     this.shuttingDown = true;
 
-    console.log('Shutting down einkframe client...');
+    console.log('Auto-shutdown initiated...');
 
-    // Close MQTT connection
-    if (this.mqttClient) {
-      this.mqttClient.disconnect();
-    }
+    setTimeout(async () => {
+      console.log('Closing MQTT connection and e-ink display');
 
-    // Close display
-    if (this.displayController) {
-      this.displayController.close();
-    }
+      if (this.mqttClient) {
+        await this.mqttClient.disconnect();
+      }
 
-    // Clean up GPIO
-    if (this.gpioHandler) {
-      this.gpioHandler.cleanup();
-    }
+      if (this.displayController) {
+        this.displayController.close();
+      }
 
-    console.log('Shutdown complete.');
-    process.exit(0);
+      if (this.gpioHandler) {
+        this.gpioHandler.close();
+        this.gpioHandler.shutdownSystem();
+      }
+    }, 2000);
+  }
+
+  /**
+   * Set up graceful shutdown
+   */
+  setupGracefulShutdown() {
+    process.on('SIGINT', async () => {
+      console.log('Graceful shutdown initiated');
+
+      if (this.mqttClient) {
+        await this.mqttClient.disconnect();
+      }
+
+      if (this.displayController) {
+        this.displayController.close();
+      }
+
+      if (this.gpioHandler) {
+        this.gpioHandler.close();
+      }
+
+      process.exit(0);
+    });
   }
 }
 
-// Create and initialize the application
+// Start application
+console.log('Starting einkframe client...');
 const app = new Application();
-app.init().catch(error => {
-  console.error('Fatal error during application initialization:', error);
+app.init().catch(err => {
+  console.error('Application initialization error:', err);
 });
