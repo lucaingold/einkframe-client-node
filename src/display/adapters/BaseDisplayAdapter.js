@@ -24,14 +24,17 @@ class BaseDisplayAdapter {
 
       // If brightness is 1.0 (default), don't process the image
       if (brightness === 1.0) {
+        console.log('Using default brightness (1.0) - no adjustment applied');
         return imageData;
       }
 
       console.log(`Adjusting image brightness by factor: ${brightness}`);
 
-      // Use sharp to adjust brightness directly with the brightness factor
+      // Use a more enhanced approach for brightness adjustment
+      // For e-ink displays, we need to ensure the contrast is maintained
       return await sharp(imageData)
-        .modulate({ brightness: brightness })
+        .linear(brightness, -(brightness - 1) * 0.5) // Adjust both brightness and offset for better results
+        .modulate({ brightness: brightness }) // Apply standard brightness modulation
         .toBuffer();
     } catch (error) {
       console.error('Error processing image brightness:', error);
